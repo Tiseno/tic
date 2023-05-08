@@ -1,0 +1,14 @@
+[package]
+name = "tic"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+inquire = { version = "0.6.2", features = ["editor"] }
+# inquire = { path = "/home/tiseno/git/inquire/inquire", features = ["editor"] }
+openapiv3 = "1.0.2"
+reqwest = { version = "0.11.17", features = ["blocking"] }
+serde = { version = "1.0.162", features = ["derive"] }
+serde_json = "1.0.96"
