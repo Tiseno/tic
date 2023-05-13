@@ -5,4 +5,4 @@ release:
 	cargo build -r
 
 watch:
-	cargo watch -c -x check
+	cargo watch -c -x clippy

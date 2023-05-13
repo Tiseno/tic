@@ -338,13 +338,7 @@ fn send_loop(
     selected_operation: &TicOperation,
 ) {
     loop {
-        match Text::new("send").prompt() {
-            Ok(_) => (),
-            Err(InquireError::OperationCanceled) => break,
-            Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
-        };
-
+        // TODO insert parameters
         let full_path = format!(
             "{}://{}{}{}",
             selected_profile.protocol,
@@ -352,6 +346,13 @@ fn send_loop(
             selected_profile.tld,
             selected_operation.path
         );
+        let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
+        match Text::new(&full_path_with_method).prompt() {
+            Ok(_) => (),
+            Err(InquireError::OperationCanceled) => break,
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        };
 
         match reqwest::blocking::Client::new()
             .request(selected_operation.method.to_owned(), &full_path)
