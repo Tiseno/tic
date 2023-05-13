@@ -1,8 +1,8 @@
-use inquire::{Editor, InquireError, Select};
+use inquire::{Editor, InquireError, Select, Text};
 use openapiv3::{OpenAPI, Operation};
 use reqwest::Method;
 use serde::Deserialize;
-use std::fs;
+use std::{collections::HashMap, fs};
 
 fn json_formatter(s: String) -> Result<String, serde_json::Error> {
     let json_value: serde_json::Value = serde_json::from_str(&s)?;
@@ -67,6 +67,7 @@ struct ApiDefinition {
     open_api: OpenAPI,
 }
 
+#[derive(Debug)]
 struct TicOperation {
     name: String,
     path: String,
@@ -108,7 +109,7 @@ fn main() {
 fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
     loop {
         let selected_profile_index = match Select::new(
-            "",
+            "profile",
             config
                 .profiles
                 .iter()
@@ -132,9 +133,13 @@ fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
 }
 
 fn select_api_loop(selected_profile: &TicProfile, apis: &[ApiDefinition]) {
+    let mut ctx = std::collections::HashMap::<String, String>::new(); // TODO load persisted
+                                                                      // env/data into the ctx
+                                                                      // from defined environment
+                                                                      // by the profile
     loop {
         let selected_api_index = match Select::new(
-            &selected_profile.name,
+            "api",
             apis.iter()
                 .map(
                     |ApiDefinition {
@@ -182,18 +187,19 @@ fn select_api_loop(selected_profile: &TicProfile, apis: &[ApiDefinition]) {
             .flatten()
             .collect();
 
-        select_operation_loop(operations, selected_api, selected_profile);
+        select_operation_loop(&mut ctx, operations, selected_api, selected_profile);
     }
 }
 
 fn select_operation_loop(
+    ctx: &mut HashMap<String, String>,
     operations: Vec<TicOperation>,
     selected_api: &ApiDefinition,
     selected_profile: &TicProfile,
 ) {
     loop {
         let selected_operation_index = match Select::new(
-            &selected_profile.name,
+            "request",
             operations
                 .iter()
                 .map(
@@ -218,50 +224,142 @@ fn select_operation_loop(
             _ => todo!(),
         };
 
-        let TicOperation {
-            name: _,
-            path,
-            method,
-            operation: _,
-        } = &operations[selected_operation_index];
+        let selected_operation = &operations[selected_operation_index];
         // TODO Get saved data for this request
 
-        send_loop(selected_api, selected_profile, path, method);
+        request_loop(ctx, selected_api, selected_profile, selected_operation);
     }
 }
 
-fn send_loop(
+fn format_parameter_name(parameter: &openapiv3::Parameter) -> String {
+    match parameter {
+        openapiv3::Parameter::Path {
+            parameter_data,
+            style: _,
+        } => format!(
+            "{{{}}}{}",
+            parameter_data.name.to_owned(),
+            if parameter_data.required.to_owned() {
+                ""
+            } else {
+                " (optional)"
+            }
+        ),
+        openapiv3::Parameter::Query {
+            parameter_data,
+            allow_reserved: _,
+            style: _,
+            allow_empty_value: _,
+        } => format!(
+            "?{}{}",
+            parameter_data.name.to_owned(),
+            if parameter_data.required.to_owned() {
+                ""
+            } else {
+                " (optional)"
+            }
+        ),
+        _ => todo!(),
+    }
+}
+
+fn request_loop(
+    ctx: &mut HashMap<String, String>,
     selected_api: &ApiDefinition,
     selected_profile: &TicProfile,
-    path: &str,
-    method: &Method,
+    selected_operation: &TicOperation,
 ) {
     loop {
+        let full_path = format!(
+            "{}://{}{}{}",
+            selected_profile.protocol,
+            selected_api.domain,
+            selected_profile.tld,
+            selected_operation.path
+        );
+
+        println!("{} {}", selected_operation.method, full_path);
+
+        let _r: Vec<String> = selected_operation
+            .operation
+            .parameters
+            .iter()
+            .filter_map(|parameter| parameter.as_item())
+            .map(|parameter| {
+                let param_name = &parameter.parameter_data_ref().name.to_owned();
+                match Text::new(&format_parameter_name(parameter)) // TODO search for options in the environment and use as autocomplete
+                    .with_initial_value(ctx.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
+                    .prompt()
+                {
+                    Ok(ok) => {
+                        if !ok.is_empty() {
+                            ctx.insert(param_name.to_owned(), ok.to_owned());
+                        }
+                        ok
+                    }
+                    Err(InquireError::OperationCanceled) => "".to_owned(), // TODO make this break
+                                                                           // the map and loop
+                    Err(InquireError::OperationInterrupted) => std::process::exit(0),
+                    _ => todo!(),
+                }
+            })
+            .collect();
+
         // TODO set url and query parameters
-        // TODO use body
-        let _body =
-            match Editor::new(&format!("{} {} {}", selected_profile.name, method, path)).prompt() {
-                Ok(ok) => ok, // TODO use editor
+
+        // TODO check token expiry and remove from ctx
+        // let a = jsonwebtoken::decode_header(token).unwrap();
+        if ctx.get("TOKEN").is_none() {
+            let token = match Text::new(&format!("token for {}", selected_profile.env)).prompt() {
+                Ok(ok) => ok,
                 Err(InquireError::OperationCanceled) => break,
                 Err(InquireError::OperationInterrupted) => std::process::exit(0),
                 _ => todo!(),
             };
+            ctx.insert("TOKEN".to_owned(), token.to_owned());
+        }
+
+        // TODO use body
+        let _body = match Editor::new("edit body").prompt() {
+            Ok(ok) => ok, // TODO use editor
+            Err(InquireError::OperationCanceled) => break,
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        };
+
+        send_loop(ctx, selected_api, selected_profile, selected_operation);
+    }
+}
+
+fn send_loop(
+    ctx: &mut HashMap<String, String>,
+    selected_api: &ApiDefinition,
+    selected_profile: &TicProfile,
+    selected_operation: &TicOperation,
+) {
+    loop {
+        match Text::new("send").prompt() {
+            Ok(_) => (),
+            Err(InquireError::OperationCanceled) => break,
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        };
 
         let full_path = format!(
             "{}://{}{}{}",
-            selected_profile.protocol, selected_api.domain, selected_profile.tld, path
+            selected_profile.protocol,
+            selected_api.domain,
+            selected_profile.tld,
+            selected_operation.path
         );
-        println!("{} {}", method, full_path);
-        // TODO get token from user and save in persistent data
-        let token = " ";
-
-        // TODO decode header of saved token
-        // let a = jsonwebtoken::decode_header(token).unwrap();
 
         match reqwest::blocking::Client::new()
-            .request(method.to_owned(), full_path)
-            // .body(body)
-            .header("Authorization", format!("Bearer {}", token))
+            .request(selected_operation.method.to_owned(), &full_path)
+            // .body(body) // TODO use body
+            .header(
+                "Authorization",
+                format!("Bearer {}", ctx.get("TOKEN").unwrap()),
+            )
             .send()
         {
             Ok(response) => {
