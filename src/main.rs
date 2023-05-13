@@ -316,7 +316,10 @@ fn request_loop(
                 Err(InquireError::OperationInterrupted) => std::process::exit(0),
                 _ => todo!(),
             };
-            ctx.insert("TOKEN".to_owned(), token.to_owned());
+            // TODO validate it with environment pem
+            if token.len() > 0 {
+                ctx.insert("TOKEN".to_owned(), token.to_owned());
+            }
         }
 
         // TODO use body
