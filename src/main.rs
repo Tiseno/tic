@@ -309,6 +309,7 @@ fn request_loop(
 
         // TODO check token expiry and remove from ctx
         // let a = jsonwebtoken::decode_header(token).unwrap();
+        // TODO environment specific key in ctx
         if ctx.get("TOKEN").is_none() {
             let token = match Text::new(&format!("token for {}", selected_profile.env)).prompt() {
                 Ok(ok) => ok,
@@ -317,14 +318,22 @@ fn request_loop(
                 _ => todo!(),
             };
             // TODO validate it with environment pem
-            if token.len() > 0 {
+            if !token.is_empty() {
                 ctx.insert("TOKEN".to_owned(), token.to_owned());
             }
         }
 
-        // TODO use body
-        let _body = match Editor::new("edit body").prompt() {
-            Ok(ok) => ok, // TODO use editor
+        let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
+        match Editor::new("edit body")
+            .with_predefined_text(ctx.get(&full_path_with_method).unwrap_or(&String::new()))
+            .with_file_extension(".json")
+            .prompt()
+        {
+            Ok(ok) => {
+                if !ok.is_empty() {
+                    ctx.insert(full_path_with_method.to_owned(), ok.to_owned());
+                }
+            }
             Err(InquireError::OperationCanceled) => break,
             Err(InquireError::OperationInterrupted) => std::process::exit(0),
             _ => todo!(),
@@ -349,6 +358,7 @@ fn send_loop(
             selected_profile.tld,
             selected_operation.path
         );
+        // TODO define full path and full path with method in one place
         let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
         match Text::new(&full_path_with_method).prompt() {
             Ok(_) => (),
@@ -357,12 +367,17 @@ fn send_loop(
             _ => todo!(),
         };
 
+        let body_text: String = ctx
+            .get(&full_path_with_method)
+            .unwrap_or(&String::new())
+            .to_owned();
+
         match reqwest::blocking::Client::new()
             .request(selected_operation.method.to_owned(), &full_path)
-            // .body(body) // TODO use body
+            .body(body_text)
             .header(
                 "Authorization",
-                format!("Bearer {}", ctx.get("TOKEN").unwrap()),
+                format!("Bearer {}", ctx.get("TOKEN").unwrap_or(&String::new())),
             )
             .send()
         {
