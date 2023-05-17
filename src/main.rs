@@ -1,5 +1,5 @@
-use chrono::TimeZone;
 use inquire::{validator::Validation, Editor, InquireError, Select, Text};
+use jsonwebtoken::DecodingKey;
 use openapiv3::{OpenAPI, Operation};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
@@ -46,11 +46,16 @@ fn read_openapi_from_path_with_removed_security_schemes(path: &str) -> OpenAPI {
 }
 
 #[derive(Deserialize, Debug)]
+struct TicEnvironment {
+    name: String,
+    public_pem_path: String,
+}
+
+#[derive(Deserialize, Debug)]
 struct TicProfile {
     name: String,
     protocol: String,
     tld: String,
-    #[allow(dead_code)]
     env: String,
     #[allow(dead_code)]
     data: String,
@@ -64,6 +69,7 @@ struct TicApiPath {
 
 #[derive(Deserialize, Debug)]
 struct TicConfig {
+    environments: Vec<TicEnvironment>,
     profiles: Vec<TicProfile>,
     apis: Vec<TicApiPath>,
 }
@@ -110,10 +116,16 @@ fn main() {
         })
         .collect();
 
-    select_profile_loop(config, apis);
+    let mut env_data = std::collections::HashMap::<String, String>::new();
+
+    select_profile_loop(config, apis, &mut env_data);
 }
 
-fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
+fn select_profile_loop(
+    config: TicConfig,
+    apis: Vec<ApiDefinition>,
+    env_data: &mut HashMap<String, String>,
+) {
     loop {
         let selected_profile_index = match Select::new(
             "profile",
@@ -135,15 +147,46 @@ fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
 
         let selected_profile = &config.profiles[selected_profile_index];
 
-        select_api_loop(selected_profile, &apis);
+        match config
+            .environments
+            .iter()
+            .find(|a| a.name.eq(&selected_profile.env))
+        {
+            Some(environment) => {
+                let pem_string = match fs::read_to_string(&environment.public_pem_path) {
+                    Ok(ok) => ok,
+                    Err(err) => {
+                        println!("Error reading pem file {}", err);
+                        break;
+                    }
+                };
+
+                let decoding_key =
+                    &jsonwebtoken::DecodingKey::from_rsa_pem(pem_string.as_bytes()).unwrap();
+
+                select_api_loop(selected_profile, decoding_key, &apis, env_data);
+            }
+            None => {
+                println!(
+                "Could not find environment with name '{}' in configuration specified by profile '{}'.",
+                selected_profile.env, selected_profile.name,
+            );
+            }
+        }
     }
 }
 
-fn select_api_loop(selected_profile: &TicProfile, apis: &[ApiDefinition]) {
-    let mut ctx = std::collections::HashMap::<String, String>::new(); // TODO load persisted
-                                                                      // env/data into the ctx
-                                                                      // from defined environment
-                                                                      // by the profile
+fn select_api_loop(
+    selected_profile: &TicProfile,
+    decoding_key: &DecodingKey,
+    apis: &[ApiDefinition],
+    env_data: &mut HashMap<String, String>,
+) {
+    // TODO load/save persisted
+    // env/data into the ctx
+    // from defined environment
+    // by the profile
+    let mut data = std::collections::HashMap::<String, String>::new();
     loop {
         let selected_api_index = match Select::new(
             "api",
@@ -194,15 +237,24 @@ fn select_api_loop(selected_profile: &TicProfile, apis: &[ApiDefinition]) {
             .flatten()
             .collect();
 
-        select_operation_loop(&mut ctx, operations, selected_api, selected_profile);
+        select_operation_loop(
+            &mut data,
+            operations,
+            selected_api,
+            decoding_key,
+            selected_profile,
+            env_data,
+        );
     }
 }
 
 fn select_operation_loop(
-    ctx: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
     operations: Vec<TicOperation>,
     selected_api: &ApiDefinition,
+    decoding_key: &DecodingKey,
     selected_profile: &TicProfile,
+    env_data: &mut HashMap<String, String>,
 ) {
     loop {
         let selected_operation_index = match Select::new(
@@ -233,7 +285,14 @@ fn select_operation_loop(
 
         let selected_operation = &operations[selected_operation_index];
 
-        request_loop(ctx, selected_api, selected_profile, selected_operation);
+        request_loop(
+            data,
+            selected_api,
+            decoding_key,
+            selected_profile,
+            selected_operation,
+            env_data,
+        );
     }
 }
 
@@ -270,10 +329,12 @@ fn format_parameter_name(parameter: &openapiv3::Parameter) -> String {
 }
 
 fn request_loop(
-    ctx: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
     selected_api: &ApiDefinition,
+    decoding_key: &DecodingKey,
     selected_profile: &TicProfile,
     selected_operation: &TicOperation,
+    env_data: &mut HashMap<String, String>,
 ) {
     loop {
         let full_path = format!(
@@ -296,12 +357,12 @@ fn request_loop(
                 match Text::new(&format_parameter_name(parameter)) // TODO search for options/data/ids
                                                                    // in the environment and use fuzzy
                                                                    // search and autocomplete
-                    .with_initial_value(ctx.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
+                    .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
                     .prompt()
                 {
                     Ok(ok) => {
                         if !ok.is_empty() {
-                            ctx.insert(param_name.to_owned(), ok.to_owned());
+                            data.insert(param_name.to_owned(), ok.to_owned());
                         }
                         ok
                     }
@@ -314,40 +375,33 @@ fn request_loop(
             .collect();
 
         // TODO set path and query parameters
+        // TODO show full request with parameters and show confirm for send/edit
 
-        // TODO check token expiry and remove from ctx
-        if ctx.get("TOKEN").is_none() {
-            let validator = |token: &str| match jsonwebtoken::decode::<Jwt>(
+        if let Some(token) = env_data.get(&selected_profile.env) {
+            match jsonwebtoken::decode::<Jwt>(
                 token,
-                // TODO read at runtime from env config instead
-                &jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("public.pem")).unwrap(),
+                decoding_key,
                 &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
             ) {
-                Ok(token) => {
-                    match chrono::Local.timestamp_opt(
-                        i64::try_from(token.claims.exp)
-                            .expect("Could not convert token exp (u64) to i64"),
-                        0,
-                    ) {
-                        chrono::LocalResult::Single(token_expire_date) => {
-                            let now = chrono::Utc::now().naive_utc();
-                            if now.ge(&token_expire_date.naive_local()) {
-                                // TODO save date so that we can invalidate when needed
-                                return Ok(Validation::Invalid(
-                                    format!(
-                                        "Token expired: {} {}",
-                                        now,
-                                        &token_expire_date.naive_local()
-                                    )
-                                    .into(),
-                                ));
-                            }
-
-                            Ok(Validation::Valid)
-                        }
-                        _ => Ok(Validation::Invalid("Token exp was invalid".into())),
-                    }
+                Ok(_) => (),
+                Err(error) => {
+                    println!(
+                        "Removed invalid token for env '{}': {}",
+                        &selected_profile.env, error
+                    );
+                    env_data.remove(&selected_profile.env);
                 }
+            }
+        }
+
+        if env_data.get(&selected_profile.env).is_none() {
+            let decoding_key = decoding_key.clone();
+            let validator = move |token: &str| match jsonwebtoken::decode::<Jwt>(
+                token,
+                &decoding_key,
+                &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
+            ) {
+                Ok(_) => Ok(Validation::Valid),
                 Err(error) => Ok(Validation::Invalid(error.into())),
             };
 
@@ -361,20 +415,20 @@ fn request_loop(
                 _ => todo!(),
             };
 
-            // TODO insert into env context and not data context
-            ctx.insert("TOKEN".to_owned(), valid_token.to_owned());
+            env_data.insert(selected_profile.env.clone(), valid_token);
+            // TODO print when token expires
         }
 
         let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
         // TODO do not edit or use request body for GET
         match Editor::new("body")
-            .with_predefined_text(ctx.get(&full_path_with_method).unwrap_or(&String::new()))
+            .with_predefined_text(data.get(&full_path_with_method).unwrap_or(&String::new()))
             .with_file_extension(".json")
             .prompt()
         {
             Ok(ok) => {
                 if !ok.is_empty() {
-                    ctx.insert(full_path_with_method.to_owned(), ok.to_owned());
+                    data.insert(full_path_with_method.to_owned(), ok.to_owned());
                 }
             }
             Err(InquireError::OperationCanceled) => break,
@@ -382,15 +436,22 @@ fn request_loop(
             _ => todo!(),
         };
 
-        send_loop(ctx, selected_api, selected_profile, selected_operation);
+        send_loop(
+            data,
+            selected_api,
+            selected_profile,
+            selected_operation,
+            env_data,
+        );
     }
 }
 
 fn send_loop(
-    ctx: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
     selected_api: &ApiDefinition,
     selected_profile: &TicProfile,
     selected_operation: &TicOperation,
+    env_data: &mut HashMap<String, String>,
 ) {
     loop {
         // TODO insert parameters
@@ -410,7 +471,7 @@ fn send_loop(
             _ => todo!(),
         };
 
-        let body_text: String = ctx
+        let body_text: String = data
             .get(&full_path_with_method)
             .unwrap_or(&String::new())
             .to_owned();
@@ -420,7 +481,12 @@ fn send_loop(
             .body(body_text)
             .header(
                 "Authorization",
-                format!("Bearer {}", ctx.get("TOKEN").unwrap_or(&String::new())),
+                format!(
+                    "Bearer {}",
+                    env_data
+                        .get(&selected_profile.env)
+                        .unwrap_or(&String::new())
+                ),
             )
             .send()
         {

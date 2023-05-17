@@ -1,10 +1,17 @@
 {
+  "environments": [
+    { "name": "test", "public_pem_path": "/path/to/public/key.pem" },
+    { "name": "prod", "public_pem_path": "/path/to/public/key.pem" }
+  ],
   "profiles": [
-    { "name": "dev", "protocol": "http", "tld": "local:3000", "env": "test", "data": "test" },
-    { "name": "test", "protocol": "https", "tld": "test", "env": "test", "data": "test" },
-    { "name": "prod", "protocol": "https", "tld": "com", "env": "prod", "data": "prod" }
+    { "name": "dev1", "setup": "local1", "env": "test", "data": "test" },
+    { "name": "dev2", "setup": "local2", "env": "test", "data": "test2" },
+    { "name": "test", "setup": "test", "env": "test", "data": "test" },
+    { "name": "prod", "setup": "prod", "env": "prod", "data": "prod" }
   ],
   "apis": [
-    { "domain": "service.my-company.", "path": "/path/to/my/openapi.json" }
+    { "domain": "service1.url.", "path": "/path/to/service1/openapi.json" },
+    { "domain": "service2.url.", "path": "/path/to/service2/openapi.json" },
+    { "domain": "service3.url.", "path": "/path/to/service3/openapi.json" }
   ]
 }
