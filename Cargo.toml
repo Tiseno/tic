@@ -6,7 +6,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+chrono = "0.4.24"
 inquire = { version = "0.6.2", features = ["editor"] }
+jsonwebtoken = "8.3.0"
 # inquire = { path = "/home/tiseno/git/inquire/inquire", features = ["editor"] }
 openapiv3 = "1.0.2"
 reqwest = { version = "0.11.17", features = ["blocking"] }

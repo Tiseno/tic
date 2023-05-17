@@ -1,8 +1,14 @@
-use inquire::{Editor, InquireError, Select, Text};
+use chrono::TimeZone;
+use inquire::{validator::Validation, Editor, InquireError, Select, Text};
 use openapiv3::{OpenAPI, Operation};
 use reqwest::Method;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs};
+
+#[derive(Serialize, Deserialize, Debug)]
+struct Jwt {
+    pub exp: u64,
+}
 
 fn json_formatter(s: String) -> Result<String, serde_json::Error> {
     let json_value: serde_json::Value = serde_json::from_str(&s)?;
@@ -88,8 +94,9 @@ impl TicOperation {
 }
 
 fn main() {
-    let config_string =
-        fs::read_to_string(".tic-config.json").expect("Could not read configuration file");
+    let config_string = fs::read_to_string(".tic-config.json").unwrap_or_else(|_| {
+        fs::read_to_string("~/.tic-config.json").expect("Could not read configuration file")
+    });
 
     let config: TicConfig =
         serde_json::from_str(&config_string).expect("Could not parse configuration file");
@@ -97,7 +104,7 @@ fn main() {
     let apis: Vec<ApiDefinition> = config
         .apis
         .iter()
-        .map(|TicApiPath { domain, path }| ApiDefinition {
+        .map(|TicApiPath { path, domain }| ApiDefinition {
             domain: domain.to_owned(),
             open_api: read_openapi_from_path_with_removed_security_schemes(path),
         })
@@ -225,7 +232,6 @@ fn select_operation_loop(
         };
 
         let selected_operation = &operations[selected_operation_index];
-        // TODO Get saved data for this request
 
         request_loop(ctx, selected_api, selected_profile, selected_operation);
     }
@@ -287,7 +293,9 @@ fn request_loop(
             .filter_map(|parameter| parameter.as_item())
             .map(|parameter| {
                 let param_name = &parameter.parameter_data_ref().name.to_owned();
-                match Text::new(&format_parameter_name(parameter)) // TODO search for options in the environment and use as autocomplete
+                match Text::new(&format_parameter_name(parameter)) // TODO search for options/data/ids
+                                                                   // in the environment and use fuzzy
+                                                                   // search and autocomplete
                     .with_initial_value(ctx.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
                     .prompt()
                 {
@@ -305,26 +313,61 @@ fn request_loop(
             })
             .collect();
 
-        // TODO set url and query parameters
+        // TODO set path and query parameters
 
         // TODO check token expiry and remove from ctx
-        // let a = jsonwebtoken::decode_header(token).unwrap();
-        // TODO environment specific key in ctx
         if ctx.get("TOKEN").is_none() {
-            let token = match Text::new(&format!("token for {}", selected_profile.env)).prompt() {
+            let validator = |token: &str| match jsonwebtoken::decode::<Jwt>(
+                token,
+                // TODO read at runtime from env config instead
+                &jsonwebtoken::DecodingKey::from_rsa_pem(include_bytes!("public.pem")).unwrap(),
+                &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
+            ) {
+                Ok(token) => {
+                    match chrono::Local.timestamp_opt(
+                        i64::try_from(token.claims.exp)
+                            .expect("Could not convert token exp (u64) to i64"),
+                        0,
+                    ) {
+                        chrono::LocalResult::Single(token_expire_date) => {
+                            let now = chrono::Utc::now().naive_utc();
+                            if now.ge(&token_expire_date.naive_local()) {
+                                // TODO save date so that we can invalidate when needed
+                                return Ok(Validation::Invalid(
+                                    format!(
+                                        "Token expired: {} {}",
+                                        now,
+                                        &token_expire_date.naive_local()
+                                    )
+                                    .into(),
+                                ));
+                            }
+
+                            Ok(Validation::Valid)
+                        }
+                        _ => Ok(Validation::Invalid("Token exp was invalid".into())),
+                    }
+                }
+                Err(error) => Ok(Validation::Invalid(error.into())),
+            };
+
+            let valid_token = match Editor::new(&format!("token for {}", selected_profile.env))
+                .with_validator(validator)
+                .prompt()
+            {
                 Ok(ok) => ok,
                 Err(InquireError::OperationCanceled) => break,
                 Err(InquireError::OperationInterrupted) => std::process::exit(0),
                 _ => todo!(),
             };
-            // TODO validate it with environment pem
-            if !token.is_empty() {
-                ctx.insert("TOKEN".to_owned(), token.to_owned());
-            }
+
+            // TODO insert into env context and not data context
+            ctx.insert("TOKEN".to_owned(), valid_token.to_owned());
         }
 
         let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
-        match Editor::new("edit body")
+        // TODO do not edit or use request body for GET
+        match Editor::new("body")
             .with_predefined_text(ctx.get(&full_path_with_method).unwrap_or(&String::new()))
             .with_file_extension(".json")
             .prompt()
@@ -389,7 +432,7 @@ fn send_loop(
                     .into_iter()
                     .collect();
 
-                const LIMIT: usize = 400;
+                const LIMIT: usize = 1000;
                 println!("{}", res.chars().take(LIMIT).collect::<String>());
                 if res.len() > LIMIT {
                     println!("...");
