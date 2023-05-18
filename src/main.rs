@@ -416,26 +416,64 @@ fn request_loop(
     env_data: &mut HashMap<String, String>,
 ) {
     loop {
-        let full_path = format!(
-            "{}://{}{}{}",
-            selected_profile.protocol,
-            selected_api.domain,
-            selected_profile.tld,
-            selected_operation.path
-        );
+        let a = match Select::new("", vec!["send", "edit"])
+            .with_vim_mode(true)
+            .prompt()
+        {
+            Ok(ok) => ok,
+            Err(InquireError::OperationCanceled) => break,
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        };
+        if a == "send" {
+            send_loop(
+                selected_profile,
+                selected_api,
+                selected_operation,
+                env_data,
+                data,
+            );
+        } else {
+            edit_request(
+                selected_profile,
+                selected_api,
+                selected_operation,
+                env_data,
+                data,
+                decoding_key,
+            );
+        }
+    }
+}
 
-        println!("{} {}", selected_operation.method, full_path);
+fn edit_request(
+    selected_profile: &TicProfile,
+    selected_api: &ApiDefinition,
+    selected_operation: &TicOperation,
+    env_data: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
+    decoding_key: &DecodingKey,
+) {
+    let full_path = format!(
+        "{}://{}{}{}",
+        selected_profile.protocol,
+        selected_api.domain,
+        selected_profile.tld,
+        selected_operation.path
+    );
 
-        let _r: Vec<String> = selected_operation
-            .operation
-            .parameters
-            .iter()
-            .filter_map(|parameter| parameter.as_item())
-            // TODO support optional parameters
-            .filter(|parameter| parameter_is_required(parameter))
-            .map(|parameter| {
-                let param_name = &parameter.parameter_data_ref().name.to_owned();
-                match Text::new(&format_parameter_name(parameter)) // TODO search for options/data/ids
+    println!("{} {}", selected_operation.method, full_path);
+
+    for parameter in selected_operation
+        .operation
+        .parameters
+        .iter()
+        .filter_map(|parameter| parameter.as_item())
+        // TODO support optional parameters
+        .filter(|parameter| parameter_is_required(parameter))
+    {
+        let param_name = &parameter.parameter_data_ref().name.to_owned();
+        match Text::new(&format_parameter_name(parameter)) // TODO search for options/data/ids
                                                                    // in the environment and use fuzzy
                                                                    // search and autocomplete
                     .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
@@ -445,89 +483,77 @@ fn request_loop(
                         if !ok.is_empty() {
                             data.insert(param_name.to_owned(), ok.to_owned());
                         }
-                        ok
                     }
-                    Err(InquireError::OperationCanceled) => "".to_owned(), // TODO make this break
-                                                                           // the map and loop
+                    Err(InquireError::OperationCanceled) => return,
                     Err(InquireError::OperationInterrupted) => std::process::exit(0),
                     _ => todo!(),
                 }
-            })
-            .collect();
+    }
 
-        // TODO set query parameters
+    // TODO set query parameters
 
-        // TODO show full request with parameters and show confirm for send/edit
+    // TODO show full request with parameters and show confirm for send/edit
 
-        if let Some(token) = env_data.get(&selected_profile.env) {
-            match jsonwebtoken::decode::<Jwt>(
-                token,
-                decoding_key,
-                &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
-            ) {
-                Ok(_) => (),
-                Err(error) => {
-                    println!(
-                        "Removed invalid token for env '{}': {}",
-                        &selected_profile.env, error
-                    );
-                    env_data.remove(&selected_profile.env);
-                }
+    if let Some(token) = env_data.get(&selected_profile.env) {
+        match jsonwebtoken::decode::<Jwt>(
+            token,
+            decoding_key,
+            &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
+        ) {
+            Ok(_) => (),
+            Err(error) => {
+                println!(
+                    "Removed invalid token for env '{}': {}",
+                    &selected_profile.env, error
+                );
+                env_data.remove(&selected_profile.env);
             }
         }
+    }
 
-        if env_data.get(&selected_profile.env).is_none() {
-            let decoding_key = decoding_key.clone();
-            let validator = move |token: &str| match jsonwebtoken::decode::<Jwt>(
-                token,
-                &decoding_key,
-                &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
-            ) {
-                Ok(_) => Ok(Validation::Valid),
-                Err(error) => Ok(Validation::Invalid(error.into())),
-            };
+    if env_data.get(&selected_profile.env).is_none() {
+        let decoding_key = decoding_key.clone();
+        let validator = move |token: &str| match jsonwebtoken::decode::<Jwt>(
+            token,
+            &decoding_key,
+            &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
+        ) {
+            Ok(_) => Ok(Validation::Valid),
+            Err(error) => Ok(Validation::Invalid(error.into())),
+        };
 
-            let valid_token = match Editor::new(&format!("token for {}", selected_profile.env))
-                .with_validator(validator)
-                .prompt()
-            {
-                Ok(ok) => ok,
-                Err(InquireError::OperationCanceled) => break,
-                Err(InquireError::OperationInterrupted) => std::process::exit(0),
-                _ => todo!(),
-            };
+        let valid_token = match Editor::new(&format!("token for {}", selected_profile.env))
+            .with_validator(validator)
+            .prompt()
+        {
+            Ok(ok) => ok,
+            Err(InquireError::OperationCanceled) => return,
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        };
 
-            env_data.insert(selected_profile.env.clone(), valid_token);
-            // TODO print when token expires
-        }
+        env_data.insert(selected_profile.env.clone(), valid_token);
+        // TODO print when token expires
+    }
 
-        let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
+    let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
 
-        if let Method::GET = selected_operation.method {
-        } else {
-            match Editor::new("body")
-                .with_predefined_text(data.get(&full_path_with_method).unwrap_or(&String::new()))
-                .with_file_extension(".json")
-                .prompt()
-            {
-                Ok(ok) => {
-                    if !ok.is_empty() {
-                        data.insert(full_path_with_method.to_owned(), ok.to_owned());
-                    }
+    if let Method::GET = selected_operation.method {
+    } else {
+        match Editor::new("body")
+            .with_predefined_text(data.get(&full_path_with_method).unwrap_or(&String::new()))
+            .with_file_extension(".json")
+            .prompt()
+        {
+            Ok(ok) => {
+                if !ok.is_empty() {
+                    data.insert(full_path_with_method.to_owned(), ok);
                 }
-                Err(InquireError::OperationCanceled) => break,
-                Err(InquireError::OperationInterrupted) => std::process::exit(0),
-                _ => todo!(),
-            };
-        }
-
-        send_loop(
-            selected_profile,
-            selected_api,
-            selected_operation,
-            env_data,
-            data,
-        );
+            }
+            Err(InquireError::OperationCanceled) => (),
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        };
     }
 }
 
@@ -539,6 +565,8 @@ fn send_loop(
     data: &mut HashMap<String, String>,
 ) {
     loop {
+        // TODO verify that all required parameters and token exists
+
         let full_path_with_parameters =
             build_request_path(selected_profile, selected_api, selected_operation, data);
         let full_path_with_method = format!(
