@@ -1,7 +1,11 @@
 {
+  "data_paths": [
+    { "name": "test", "path": "/home/path/to/.tic/test-data.json" },
+    { "name": "prod", "path": "/home/path/to/.tic/prod-data.json" }
+  ],
   "environments": [
-    { "name": "test", "public_pem_path": "/path/to/public/key.pem" },
-    { "name": "prod", "public_pem_path": "/path/to/public/key.pem" }
+    { "name": "test", "path": "/home/.tic/test-env.json", "public_pem_path": "/path/to/public/key.pem" },
+    { "name": "prod", "path": "/home/.tic/prod-env.json", "public_pem_path": "/path/to/public/key.pem" }
   ],
   "profiles": [
     { "name": "dev1", "setup": "local1", "env": "test", "data": "test" },

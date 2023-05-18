@@ -47,8 +47,15 @@ fn read_openapi_from_path_with_removed_security_schemes(path: &str) -> OpenAPI {
 }
 
 #[derive(Deserialize, Debug)]
+struct TicDataConfig {
+    name: String,
+    path: String,
+}
+
+#[derive(Deserialize, Debug)]
 struct TicEnvironment {
     name: String,
+    path: String,
     public_pem_path: String,
 }
 
@@ -70,6 +77,7 @@ struct TicApiPath {
 
 #[derive(Deserialize, Debug)]
 struct TicConfig {
+    data_paths: Vec<TicDataConfig>,
     environments: Vec<TicEnvironment>,
     profiles: Vec<TicProfile>,
     apis: Vec<TicApiPath>,
@@ -122,16 +130,10 @@ fn main() {
         })
         .collect();
 
-    let mut env_data = std::collections::HashMap::<String, String>::new();
-
-    select_profile_loop(config, apis, &mut env_data);
+    select_profile_loop(config, apis);
 }
 
-fn select_profile_loop(
-    config: TicConfig,
-    apis: Vec<ApiDefinition>,
-    env_data: &mut HashMap<String, String>,
-) {
+fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
     loop {
         let selected_profile_index = match Select::new(
             "profile",
@@ -170,7 +172,44 @@ fn select_profile_loop(
                 let decoding_key =
                     &jsonwebtoken::DecodingKey::from_rsa_pem(pem_string.as_bytes()).unwrap();
 
-                select_api_loop(selected_profile, decoding_key, &apis, env_data);
+                let mut data = std::collections::HashMap::<String, String>::new();
+
+                if let Some(data_path) = config
+                    .data_paths
+                    .iter()
+                    .find(|e| e.name == environment.name)
+                {
+                    // TODO do this nicer when we do not have a data file
+                    let saved_data_string = fs::read_to_string(&data_path.path)
+                        .expect("Could not find specified data file");
+                    let saved_data: HashMap<String, String> =
+                        serde_json::from_str(&saved_data_string).unwrap();
+                    data = saved_data;
+                }
+
+                let mut env_data = std::collections::HashMap::<String, String>::new();
+
+                if let Some(environment) = config
+                    .environments
+                    .iter()
+                    .find(|e| e.name == selected_profile.env)
+                {
+                    // TODO do this nicer when we do not have a data file
+                    let saved_data_string = fs::read_to_string(&environment.path)
+                        .expect("Could not find specified data file");
+                    let saved_data: HashMap<String, String> =
+                        serde_json::from_str(&saved_data_string).unwrap();
+                    env_data = saved_data;
+                }
+
+                select_api_loop(
+                    selected_profile,
+                    decoding_key,
+                    &apis,
+                    &mut env_data,
+                    &mut data,
+                    &config,
+                );
             }
             None => {
                 println!(
@@ -187,12 +226,9 @@ fn select_api_loop(
     decoding_key: &DecodingKey,
     apis: &[ApiDefinition],
     env_data: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
+    config: &TicConfig,
 ) {
-    // TODO load/save persisted
-    // env/data into the ctx
-    // from defined environment
-    // by the profile
-    let mut data = std::collections::HashMap::<String, String>::new();
     loop {
         let selected_api_index = match Select::new(
             "api",
@@ -244,12 +280,13 @@ fn select_api_loop(
             .collect();
 
         select_operation_loop(
-            &mut data,
+            data,
             operations,
             selected_api,
             decoding_key,
             selected_profile,
             env_data,
+            config,
         );
     }
 }
@@ -261,6 +298,7 @@ fn select_operation_loop(
     decoding_key: &DecodingKey,
     selected_profile: &TicProfile,
     env_data: &mut HashMap<String, String>,
+    config: &TicConfig,
 ) {
     loop {
         let selected_operation_index = match Select::new(
@@ -298,6 +336,7 @@ fn select_operation_loop(
             selected_profile,
             selected_operation,
             env_data,
+            config,
         );
     }
 }
@@ -433,6 +472,7 @@ fn request_loop(
     selected_profile: &TicProfile,
     selected_operation: &TicOperation,
     env_data: &mut HashMap<String, String>,
+    config: &TicConfig,
 ) {
     loop {
         let full_path_with_parameters = build_request_path(
@@ -457,7 +497,7 @@ fn request_loop(
             _ => todo!(),
         };
         if a == "send" {
-            send_loop(
+            send_request(
                 selected_profile,
                 selected_api,
                 selected_operation,
@@ -473,6 +513,24 @@ fn request_loop(
                 data,
                 decoding_key,
             );
+
+            if let Some(data_path) = config
+                .data_paths
+                .iter()
+                .find(|e| e.name == selected_profile.env)
+            {
+                let s = serde_json::json!(data);
+                fs::write(&data_path.path, s.to_string()).expect("Could not save data");
+            }
+
+            if let Some(environment) = config
+                .environments
+                .iter()
+                .find(|e| e.name == selected_profile.env)
+            {
+                let s = serde_json::json!(env_data);
+                fs::write(&environment.path, s.to_string()).expect("Could not save env data");
+            }
         }
     }
 }
@@ -503,26 +561,25 @@ fn edit_request(
         .filter(|parameter| parameter_is_required(parameter))
     {
         let param_name = &parameter.parameter_data_ref().name.to_owned();
-        match Text::new(&format_parameter_name(parameter)) // TODO search for options/data/ids
-                                                                   // in the environment and use fuzzy
-                                                                   // search and autocomplete
-                    .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
-                    .prompt()
-                {
-                    Ok(ok) => {
-                        if !ok.is_empty() {
-                            data.insert(param_name.to_owned(), ok.to_owned());
-                        }
-                    }
-                    Err(InquireError::OperationCanceled) => return,
-                    Err(InquireError::OperationInterrupted) => std::process::exit(0),
-                    _ => todo!(),
+        // TODO search for options/data/ids
+        // in the environment and use fuzzy
+        // search and autocomplete
+        match Text::new(&format_parameter_name(parameter))
+            .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
+            .prompt()
+        {
+            Ok(ok) => {
+                if !ok.is_empty() {
+                    data.insert(param_name.to_owned(), ok.to_owned());
                 }
+            }
+            Err(InquireError::OperationCanceled) => return,
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        }
     }
 
     // TODO set query parameters
-
-    // TODO show full request with parameters and show confirm for send/edit
 
     if let Some(token) = env_data.get(&selected_profile.env) {
         match jsonwebtoken::decode::<Jwt>(
@@ -587,7 +644,7 @@ fn edit_request(
     }
 }
 
-fn send_loop(
+fn send_request(
     selected_profile: &TicProfile,
     selected_api: &ApiDefinition,
     selected_operation: &TicOperation,
