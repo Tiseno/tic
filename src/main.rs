@@ -606,7 +606,9 @@ fn edit_request(
             .prompt()
         {
             Ok(ok) => {
-                if !ok.is_empty() {
+                if ok.is_empty() {
+                    data.remove(&param_name.to_owned());
+                } else {
                     data.insert(param_name.to_owned(), ok.to_owned());
                 }
             }
