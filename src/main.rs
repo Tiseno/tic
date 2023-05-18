@@ -6,6 +6,37 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, fs};
 
+fn colorize_json_value(value: &serde_json::Value) -> String {
+    match value {
+        serde_json::Value::Null => "null".bright_black().to_string(),
+        serde_json::Value::Bool(b) => b.to_string().purple().to_string(),
+        serde_json::Value::Number(n) => n.to_string().purple().to_string(),
+        serde_json::Value::String(s) => format!("\"{}\"", s.to_string()).green().to_string(),
+        serde_json::Value::Array(arr) => {
+            let elements: Vec<String> = arr
+                .iter()
+                .map(colorize_json_value)
+                .map(|e| e.to_string())
+                .collect();
+            format!("[{}]", elements.join(", ")).to_string()
+        }
+        serde_json::Value::Object(obj) => {
+            let elements: Vec<String> = obj
+                .iter()
+                .map(|(key, value)| {
+                    format!(
+                        "{}: {}",
+                        format!("\"{}\"", key).yellow().to_string(),
+                        colorize_json_value(value)
+                    )
+                })
+                .map(|e| e.to_string())
+                .collect();
+            format!("{{{}}}", elements.join(", ")).to_string()
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug)]
 struct Jwt {
     pub exp: u64,
@@ -704,9 +735,21 @@ fn send_request(
                 .collect();
 
             const LIMIT: usize = 1000;
-            println!("{}", res.chars().take(LIMIT).collect::<String>());
-            if res.len() > LIMIT {
-                println!("...");
+            let rrr = serde_json::from_str(&res);
+            match &rrr {
+                Ok(ok) => {
+                    let colorized = colorize_json_value(ok);
+                    println!("{}", colorized.chars().take(LIMIT).collect::<String>());
+                    if res.len() > LIMIT {
+                        println!("...");
+                    }
+                }
+                Err(_) => {
+                    println!("{}", res.chars().take(LIMIT).collect::<String>());
+                    if res.len() > LIMIT {
+                        println!("...");
+                    }
+                }
             }
 
             let formatted_res = json_formatter(res.clone()).unwrap_or(res);
