@@ -4,7 +4,7 @@ use jsonwebtoken::DecodingKey;
 use openapiv3::{OpenAPI, Operation};
 use reqwest::Method;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, env, fs};
 
 #[derive(Serialize, Deserialize, Debug)]
 struct Jwt {
@@ -102,7 +102,12 @@ impl TicOperation {
 
 fn main() {
     let config_string = fs::read_to_string(".tic-config.json").unwrap_or_else(|_| {
-        fs::read_to_string("~/.tic-config.json").expect("Could not read configuration file")
+        fs::read_to_string(format!(
+            "{}/{}",
+            env::var("HOME").expect("Could not resolve home directory to read configuration file"),
+            ".tic-config.json"
+        ))
+        .expect("Could not read configuration file")
     });
 
     let config: TicConfig =
