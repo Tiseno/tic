@@ -518,7 +518,7 @@ fn request_loop(
             selected_operation.method, full_path_with_parameters
         );
 
-        let a = match Select::new("", vec!["send", "edit"])
+        let a = match Select::new("", vec!["send", "edit data", "invalidate token"])
             .with_vim_mode(true)
             .prompt()
         {
@@ -535,7 +535,7 @@ fn request_loop(
                 env_data,
                 data,
             );
-        } else {
+        } else if a == "edit data" {
             edit_request(
                 selected_profile,
                 selected_api,
@@ -562,8 +562,14 @@ fn request_loop(
                 let s = serde_json::json!(env_data);
                 fs::write(&environment.path, s.to_string()).expect("Could not save env data");
             }
+        } else {
+            env_data.remove(&selected_profile.env);
         }
     }
+}
+
+fn operation_data_key(selected_operation: &TicOperation) -> String {
+    format!("{} {}", selected_operation.method, selected_operation.path)
 }
 
 fn edit_request(
@@ -654,18 +660,19 @@ fn edit_request(
         // TODO print when token expires
     }
 
-    let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
-
     if let Method::GET = selected_operation.method {
     } else {
         match Editor::new("body")
-            .with_predefined_text(data.get(&full_path_with_method).unwrap_or(&String::new()))
+            .with_predefined_text(
+                data.get(&operation_data_key(selected_operation))
+                    .unwrap_or(&String::new()),
+            )
             .with_file_extension(".json")
             .prompt()
         {
             Ok(ok) => {
                 if !ok.is_empty() {
-                    data.insert(full_path_with_method.to_owned(), ok);
+                    data.insert(operation_data_key(selected_operation), ok);
                 }
             }
             Err(InquireError::OperationCanceled) => (),
@@ -685,20 +692,8 @@ fn send_request(
     // TODO move verifying and entering of token to here
     // TODO verify that all required parameters and token exists
 
-    let full_path_with_parameters_colored = build_request_path(
-        selected_profile,
-        selected_api,
-        selected_operation,
-        data,
-        true,
-    );
-    let full_path_with_method = format!(
-        "{} {}",
-        selected_operation.method, full_path_with_parameters_colored
-    );
-
     let body: String = data
-        .get(&full_path_with_method)
+        .get(&operation_data_key(selected_operation))
         .unwrap_or(&String::new())
         .to_owned();
 
@@ -709,7 +704,11 @@ fn send_request(
         data,
         false,
     );
-    match reqwest::blocking::Client::new()
+
+    match reqwest::blocking::Client::builder()
+        .danger_accept_invalid_certs(true)
+        .build()
+        .unwrap()
         .request(
             selected_operation.method.to_owned(),
             &full_path_with_parameters,
