@@ -7,6 +7,7 @@ edition = "2021"
 
 [dependencies]
 chrono = "0.4.24"
+colored = "2.0.0"
 inquire = { version = "0.6.2", features = ["editor"] }
 jsonwebtoken = "8.3.0"
 # inquire = { path = "/home/tiseno/git/inquire/inquire", features = ["editor"] }

@@ -1,3 +1,4 @@
+use colored::*;
 use inquire::{validator::Validation, Editor, InquireError, Select, Text};
 use jsonwebtoken::DecodingKey;
 use openapiv3::{OpenAPI, Operation};
@@ -301,6 +302,7 @@ fn build_request_path(
     selected_api: &ApiDefinition,
     selected_operation: &TicOperation,
     data: &mut HashMap<String, String>,
+    use_colored: bool,
 ) -> String {
     let mut full_path_with_parameters = format!(
         "{}://{}{}{}",
@@ -323,10 +325,22 @@ fn build_request_path(
                     parameter_data,
                     style: _,
                 } => {
-                    full_path_with_parameters = full_path_with_parameters.replace(
-                        &format!("{{{}}}", &parameter_name(parameter)),
-                        data.get(&parameter_data.name).unwrap_or(&String::new()),
-                    );
+                    if use_colored {
+                        full_path_with_parameters = full_path_with_parameters.replace(
+                            &format!("{{{}}}", &parameter_name(parameter)),
+                            &data
+                                .get(&parameter_data.name)
+                                .map(|n| n.green())
+                                .unwrap_or_else(|| String::from("<missing>").red())
+                                .to_string(),
+                        );
+                    } else {
+                        full_path_with_parameters = full_path_with_parameters.replace(
+                            &format!("{{{}}}", &parameter_name(parameter)),
+                            data.get(&parameter_data.name)
+                                .unwrap_or(&String::from("<missing>")),
+                        );
+                    }
                 }
                 openapiv3::Parameter::Query {
                     parameter_data: _,
@@ -416,6 +430,18 @@ fn request_loop(
     env_data: &mut HashMap<String, String>,
 ) {
     loop {
+        let full_path_with_parameters = build_request_path(
+            selected_profile,
+            selected_api,
+            selected_operation,
+            data,
+            true,
+        );
+        println!(
+            "{} {}",
+            selected_operation.method, full_path_with_parameters
+        );
+
         let a = match Select::new("", vec!["send", "edit"])
             .with_vim_mode(true)
             .prompt()
@@ -461,7 +487,6 @@ fn edit_request(
         selected_profile.tld,
         selected_operation.path
     );
-
     println!("{} {}", selected_operation.method, full_path);
 
     for parameter in selected_operation
@@ -564,72 +589,77 @@ fn send_loop(
     env_data: &mut HashMap<String, String>,
     data: &mut HashMap<String, String>,
 ) {
-    loop {
-        // TODO verify that all required parameters and token exists
+    // TODO move verifying and entering of token to here
+    // TODO verify that all required parameters and token exists
 
-        let full_path_with_parameters =
-            build_request_path(selected_profile, selected_api, selected_operation, data);
-        let full_path_with_method = format!(
-            "{} {}",
-            selected_operation.method, full_path_with_parameters
-        );
-        match Text::new(&full_path_with_method).prompt() {
-            Ok(_) => (),
-            Err(InquireError::OperationCanceled) => break,
-            Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
-        };
+    let full_path_with_parameters_colored = build_request_path(
+        selected_profile,
+        selected_api,
+        selected_operation,
+        data,
+        true,
+    );
+    let full_path_with_method = format!(
+        "{} {}",
+        selected_operation.method, full_path_with_parameters_colored
+    );
 
-        let body: String = data
-            .get(&full_path_with_method)
-            .unwrap_or(&String::new())
-            .to_owned();
+    let body: String = data
+        .get(&full_path_with_method)
+        .unwrap_or(&String::new())
+        .to_owned();
 
-        match reqwest::blocking::Client::new()
-            .request(
-                selected_operation.method.to_owned(),
-                &full_path_with_parameters,
-            )
-            .body(body)
-            .header(
-                "Authorization",
-                format!(
-                    "Bearer {}",
-                    env_data
-                        .get(&selected_profile.env)
-                        .unwrap_or(&String::new())
-                ),
-            )
-            .send()
-        {
-            Ok(response) => {
-                let res: String = response
-                    .text()
-                    .expect("Could not get response text")
-                    .chars()
-                    .into_iter()
-                    .collect();
+    let full_path_with_parameters = build_request_path(
+        selected_profile,
+        selected_api,
+        selected_operation,
+        data,
+        false,
+    );
+    match reqwest::blocking::Client::new()
+        .request(
+            selected_operation.method.to_owned(),
+            &full_path_with_parameters,
+        )
+        .body(body)
+        .header(
+            "Authorization",
+            format!(
+                "Bearer {}",
+                env_data
+                    .get(&selected_profile.env)
+                    .unwrap_or(&String::new())
+            ),
+        )
+        .send()
+    {
+        Ok(response) => {
+            let res: String = response
+                .text()
+                .expect("Could not get response text")
+                .chars()
+                .into_iter()
+                .collect();
 
-                const LIMIT: usize = 1000;
-                println!("{}", res.chars().take(LIMIT).collect::<String>());
-                if res.len() > LIMIT {
-                    println!("...");
-                }
-
-                let formatted_res = json_formatter(res.clone()).unwrap_or(res);
-
-                match Editor::new("response body")
-                    .with_predefined_text(&formatted_res)
-                    .with_file_extension(".json")
-                    .prompt()
-                {
-                    Ok(_) => (),
-                    Err(InquireError::OperationCanceled) => break,
-                    Err(InquireError::OperationInterrupted) => std::process::exit(0),
-                    _ => todo!(),
-                };
+            const LIMIT: usize = 1000;
+            println!("{}", res.chars().take(LIMIT).collect::<String>());
+            if res.len() > LIMIT {
+                println!("...");
             }
-            Err(err) => println!("{}", err),
+
+            let formatted_res = json_formatter(res.clone()).unwrap_or(res);
+
+            match Editor::new("response body")
+                .with_predefined_text(&formatted_res)
+                .with_file_extension(".json")
+                .prompt()
+            {
+                Ok(_) => (),
+                Err(InquireError::OperationCanceled) => (),
+                Err(InquireError::OperationInterrupted) => std::process::exit(0),
+                _ => todo!(),
+            };
         }
+        Err(err) => println!("{}", err),
     }
 }
