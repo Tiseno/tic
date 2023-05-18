@@ -296,6 +296,38 @@ fn select_operation_loop(
     }
 }
 
+fn parameter_name(parameter: &openapiv3::Parameter) -> String {
+    match parameter {
+        openapiv3::Parameter::Path {
+            parameter_data,
+            style: _,
+        } => parameter_data.name.to_owned(),
+        openapiv3::Parameter::Query {
+            parameter_data,
+            allow_reserved: _,
+            style: _,
+            allow_empty_value: _,
+        } => parameter_data.name.to_owned(),
+        _ => todo!(),
+    }
+}
+
+fn parameter_is_required(parameter: &openapiv3::Parameter) -> bool {
+    match parameter {
+        openapiv3::Parameter::Path {
+            parameter_data,
+            style: _,
+        } => parameter_data.required,
+        openapiv3::Parameter::Query {
+            parameter_data,
+            allow_reserved: _,
+            style: _,
+            allow_empty_value: _,
+        } => parameter_data.required,
+        _ => todo!(),
+    }
+}
+
 fn format_parameter_name(parameter: &openapiv3::Parameter) -> String {
     match parameter {
         openapiv3::Parameter::Path {
@@ -352,6 +384,8 @@ fn request_loop(
             .parameters
             .iter()
             .filter_map(|parameter| parameter.as_item())
+            // TODO support optional parameters
+            .filter(|parameter| parameter_is_required(parameter))
             .map(|parameter| {
                 let param_name = &parameter.parameter_data_ref().name.to_owned();
                 match Text::new(&format_parameter_name(parameter)) // TODO search for options/data/ids
@@ -374,7 +408,8 @@ fn request_loop(
             })
             .collect();
 
-        // TODO set path and query parameters
+        // TODO set query parameters
+
         // TODO show full request with parameters and show confirm for send/edit
 
         if let Some(token) = env_data.get(&selected_profile.env) {
@@ -454,16 +489,35 @@ fn send_loop(
     env_data: &mut HashMap<String, String>,
 ) {
     loop {
-        // TODO insert parameters
-        let full_path = format!(
+        let mut full_path_with_parameters = format!(
             "{}://{}{}{}",
             selected_profile.protocol,
             selected_api.domain,
             selected_profile.tld,
             selected_operation.path
         );
+
+        selected_operation
+            .operation
+            .parameters
+            .iter()
+            .filter_map(|parameter| parameter.as_item())
+            // TODO support optional parameters
+            .filter(|parameter| parameter_is_required(parameter))
+            .for_each(|parameter| {
+                full_path_with_parameters = full_path_with_parameters.replace(
+                    &format!("{{{}}}", &parameter_name(parameter)),
+                    data
+                        .get(&parameter_name(parameter))
+                        .unwrap_or(&String::new()),
+                );
+            });
+
         // TODO define full path and full path with method in one place
-        let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
+        let full_path_with_method = format!(
+            "{} {}",
+            selected_operation.method, full_path_with_parameters
+        );
         match Text::new(&full_path_with_method).prompt() {
             Ok(_) => (),
             Err(InquireError::OperationCanceled) => break,
@@ -477,7 +531,10 @@ fn send_loop(
             .to_owned();
 
         match reqwest::blocking::Client::new()
-            .request(selected_operation.method.to_owned(), &full_path)
+            .request(
+                selected_operation.method.to_owned(),
+                &full_path_with_parameters,
+            )
             .body(body_text)
             .header(
                 "Authorization",
