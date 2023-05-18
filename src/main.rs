@@ -296,6 +296,53 @@ fn select_operation_loop(
     }
 }
 
+fn build_request_path(
+    selected_profile: &TicProfile,
+    selected_api: &ApiDefinition,
+    selected_operation: &TicOperation,
+    data: &mut HashMap<String, String>,
+) -> String {
+    let mut full_path_with_parameters = format!(
+        "{}://{}{}{}",
+        selected_profile.protocol,
+        selected_api.domain,
+        selected_profile.tld,
+        selected_operation.path
+    );
+
+    selected_operation
+        .operation
+        .parameters
+        .iter()
+        .filter_map(|parameter| parameter.as_item())
+        // TODO support optional parameters
+        .filter(|parameter| parameter_is_required(parameter))
+        .for_each(|parameter| {
+            match parameter {
+                openapiv3::Parameter::Path {
+                    parameter_data,
+                    style: _,
+                } => {
+                    full_path_with_parameters = full_path_with_parameters.replace(
+                        &format!("{{{}}}", &parameter_name(parameter)),
+                        data.get(&parameter_data.name).unwrap_or(&String::new()),
+                    );
+                }
+                openapiv3::Parameter::Query {
+                    parameter_data: _,
+                    allow_reserved: _,
+                    style: _,
+                    allow_empty_value: _,
+                } => {
+                    todo!()
+                }
+                _ => todo!(),
+            };
+        });
+
+    full_path_with_parameters
+}
+
 fn parameter_name(parameter: &openapiv3::Parameter) -> String {
     match parameter {
         openapiv3::Parameter::Path {
@@ -455,65 +502,45 @@ fn request_loop(
         }
 
         let full_path_with_method = format!("{} {}", selected_operation.method, full_path);
-        // TODO do not edit or use request body for GET
-        match Editor::new("body")
-            .with_predefined_text(data.get(&full_path_with_method).unwrap_or(&String::new()))
-            .with_file_extension(".json")
-            .prompt()
-        {
-            Ok(ok) => {
-                if !ok.is_empty() {
-                    data.insert(full_path_with_method.to_owned(), ok.to_owned());
+
+        if let Method::GET = selected_operation.method {
+        } else {
+            match Editor::new("body")
+                .with_predefined_text(data.get(&full_path_with_method).unwrap_or(&String::new()))
+                .with_file_extension(".json")
+                .prompt()
+            {
+                Ok(ok) => {
+                    if !ok.is_empty() {
+                        data.insert(full_path_with_method.to_owned(), ok.to_owned());
+                    }
                 }
-            }
-            Err(InquireError::OperationCanceled) => break,
-            Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
-        };
+                Err(InquireError::OperationCanceled) => break,
+                Err(InquireError::OperationInterrupted) => std::process::exit(0),
+                _ => todo!(),
+            };
+        }
 
         send_loop(
-            data,
-            selected_api,
             selected_profile,
+            selected_api,
             selected_operation,
             env_data,
+            data,
         );
     }
 }
 
 fn send_loop(
-    data: &mut HashMap<String, String>,
-    selected_api: &ApiDefinition,
     selected_profile: &TicProfile,
+    selected_api: &ApiDefinition,
     selected_operation: &TicOperation,
     env_data: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
 ) {
     loop {
-        let mut full_path_with_parameters = format!(
-            "{}://{}{}{}",
-            selected_profile.protocol,
-            selected_api.domain,
-            selected_profile.tld,
-            selected_operation.path
-        );
-
-        selected_operation
-            .operation
-            .parameters
-            .iter()
-            .filter_map(|parameter| parameter.as_item())
-            // TODO support optional parameters
-            .filter(|parameter| parameter_is_required(parameter))
-            .for_each(|parameter| {
-                full_path_with_parameters = full_path_with_parameters.replace(
-                    &format!("{{{}}}", &parameter_name(parameter)),
-                    data
-                        .get(&parameter_name(parameter))
-                        .unwrap_or(&String::new()),
-                );
-            });
-
-        // TODO define full path and full path with method in one place
+        let full_path_with_parameters =
+            build_request_path(selected_profile, selected_api, selected_operation, data);
         let full_path_with_method = format!(
             "{} {}",
             selected_operation.method, full_path_with_parameters
@@ -525,7 +552,7 @@ fn send_loop(
             _ => todo!(),
         };
 
-        let body_text: String = data
+        let body: String = data
             .get(&full_path_with_method)
             .unwrap_or(&String::new())
             .to_owned();
@@ -535,7 +562,7 @@ fn send_loop(
                 selected_operation.method.to_owned(),
                 &full_path_with_parameters,
             )
-            .body(body_text)
+            .body(body)
             .header(
                 "Authorization",
                 format!(
