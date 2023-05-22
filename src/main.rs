@@ -725,6 +725,7 @@ fn send_request(
                     .unwrap_or(&String::new())
             ),
         )
+        .header("Content-Type", "application/json")
         .send()
     {
         Ok(response) => {
