@@ -234,12 +234,12 @@ fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
                 }
 
                 select_api_loop(
+                    &config,
                     selected_profile,
                     decoding_key,
                     &apis,
                     &mut env_data,
                     &mut data,
-                    &config,
                 );
             }
             None => {
@@ -253,12 +253,12 @@ fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
 }
 
 fn select_api_loop(
+    config: &TicConfig,
     selected_profile: &TicProfile,
     decoding_key: &DecodingKey,
     apis: &[ApiDefinition],
     env_data: &mut HashMap<String, String>,
     data: &mut HashMap<String, String>,
-    config: &TicConfig,
 ) {
     loop {
         let selected_api_index = match Select::new(
@@ -311,25 +311,25 @@ fn select_api_loop(
             .collect();
 
         select_operation_loop(
+            config,
             data,
             operations,
             selected_api,
             decoding_key,
             selected_profile,
             env_data,
-            config,
         );
     }
 }
 
 fn select_operation_loop(
+    config: &TicConfig,
     data: &mut HashMap<String, String>,
     operations: Vec<TicOperation>,
     selected_api: &ApiDefinition,
     decoding_key: &DecodingKey,
     selected_profile: &TicProfile,
     env_data: &mut HashMap<String, String>,
-    config: &TicConfig,
 ) {
     loop {
         let selected_operation_index = match Select::new(
@@ -361,13 +361,13 @@ fn select_operation_loop(
         let selected_operation = &operations[selected_operation_index];
 
         request_loop(
+            config,
             data,
             selected_api,
             decoding_key,
             selected_profile,
             selected_operation,
             env_data,
-            config,
         );
     }
 }
@@ -497,13 +497,13 @@ fn format_parameter_name(parameter: &openapiv3::Parameter) -> String {
 }
 
 fn request_loop(
+    config: &TicConfig,
     data: &mut HashMap<String, String>,
     selected_api: &ApiDefinition,
     decoding_key: &DecodingKey,
     selected_profile: &TicProfile,
     selected_operation: &TicOperation,
     env_data: &mut HashMap<String, String>,
-    config: &TicConfig,
 ) {
     loop {
         let full_path_with_parameters = build_request_path(
@@ -518,9 +518,21 @@ fn request_loop(
             selected_operation.method, full_path_with_parameters
         );
 
-        let a = match Select::new("", vec!["send", "edit data", "invalidate token"])
-            .with_vim_mode(true)
-            .prompt()
+        // TODO print the current body
+        // TODO hide edit body for get requests
+        let a = match Select::new(
+            "",
+            vec![
+                "send",
+                "edit body",
+                "edit required parameters",
+                "edit optional parameters",
+                "invalidate all optional parameters",
+                "invalidate token",
+            ],
+        )
+        .with_vim_mode(true)
+        .prompt()
         {
             Ok(ok) => ok,
             Err(InquireError::OperationCanceled) => break,
@@ -529,42 +541,91 @@ fn request_loop(
         };
         if a == "send" {
             send_request(
+                config,
                 selected_profile,
-                selected_api,
-                selected_operation,
-                env_data,
-                data,
-            );
-        } else if a == "edit data" {
-            edit_request(
-                selected_profile,
-                selected_api,
-                selected_operation,
-                env_data,
-                data,
                 decoding_key,
+                selected_api,
+                selected_operation,
+                env_data,
+                data,
             );
-
-            if let Some(data_path) = config
-                .data_paths
-                .iter()
-                .find(|e| e.name == selected_profile.env)
-            {
-                let s = serde_json::json!(data);
-                fs::write(&data_path.path, s.to_string()).expect("Could not save data");
-            }
-
-            if let Some(environment) = config
-                .environments
-                .iter()
-                .find(|e| e.name == selected_profile.env)
-            {
-                let s = serde_json::json!(env_data);
-                fs::write(&environment.path, s.to_string()).expect("Could not save env data");
-            }
-        } else {
+        } else if a == "invalidate token" {
             env_data.remove(&selected_profile.env);
+            save_env(config, selected_profile, env_data)
+        } else {
+            let full_path = format!(
+                "{}://{}{}{}",
+                selected_profile.protocol,
+                selected_api.domain,
+                selected_profile.tld,
+                selected_operation.path
+            );
+            println!("{} {}", selected_operation.method, full_path);
+
+            if a == "edit body" {
+                edit_body(
+                    selected_profile,
+                    selected_api,
+                    selected_operation,
+                    env_data,
+                    data,
+                    decoding_key,
+                );
+                save_data(config, selected_profile, data)
+            } else if a == "edit required parameters" {
+                edit_required_parameters(
+                    selected_profile,
+                    selected_api,
+                    selected_operation,
+                    env_data,
+                    data,
+                    decoding_key,
+                );
+                save_data(config, selected_profile, data)
+            } else if a == "edit optional parameters" {
+                edit_optional_parameters(
+                    selected_profile,
+                    selected_api,
+                    selected_operation,
+                    env_data,
+                    data,
+                    decoding_key,
+                );
+                save_data(config, selected_profile, data)
+            } else if a == "invalidate all optional parameters" {
+                println!("Not implemented.")
+            }
         }
+    }
+}
+
+fn save_env(
+    config: &TicConfig,
+    selected_profile: &TicProfile,
+    env_data: &mut HashMap<String, String>,
+) {
+    if let Some(environment) = config
+        .environments
+        .iter()
+        .find(|e| e.name == selected_profile.env)
+    {
+        let s = serde_json::json!(env_data);
+        fs::write(&environment.path, s.to_string()).expect("Could not save env data");
+    }
+}
+
+fn save_data(
+    config: &TicConfig,
+    selected_profile: &TicProfile,
+    data: &mut HashMap<String, String>,
+) {
+    if let Some(data_path) = config
+        .data_paths
+        .iter()
+        .find(|e| e.name == selected_profile.env)
+    {
+        let s = serde_json::json!(data);
+        fs::write(&data_path.path, s.to_string()).expect("Could not save data");
     }
 }
 
@@ -572,29 +633,46 @@ fn operation_data_key(selected_operation: &TicOperation) -> String {
     format!("{} {}", selected_operation.method, selected_operation.path)
 }
 
-fn edit_request(
-    selected_profile: &TicProfile,
-    selected_api: &ApiDefinition,
+fn edit_body(
+    _selected_profile: &TicProfile,
+    _selected_api: &ApiDefinition,
     selected_operation: &TicOperation,
-    env_data: &mut HashMap<String, String>,
+    _env_data: &mut HashMap<String, String>,
     data: &mut HashMap<String, String>,
-    decoding_key: &DecodingKey,
+    _decoding_key: &DecodingKey,
 ) {
-    let full_path = format!(
-        "{}://{}{}{}",
-        selected_profile.protocol,
-        selected_api.domain,
-        selected_profile.tld,
-        selected_operation.path
-    );
-    println!("{} {}", selected_operation.method, full_path);
+    match Editor::new("body")
+        .with_predefined_text(
+            data.get(&operation_data_key(selected_operation))
+                .unwrap_or(&String::new()),
+        )
+        .with_file_extension(".json")
+        .prompt()
+    {
+        Ok(ok) => {
+            if !ok.is_empty() {
+                data.insert(operation_data_key(selected_operation), ok);
+            }
+        }
+        Err(InquireError::OperationCanceled) => (),
+        Err(InquireError::OperationInterrupted) => std::process::exit(0),
+        _ => todo!(),
+    };
+}
 
+fn edit_required_parameters(
+    _selected_profile: &TicProfile,
+    _selected_api: &ApiDefinition,
+    selected_operation: &TicOperation,
+    _env_data: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
+    _decoding_key: &DecodingKey,
+) {
     for parameter in selected_operation
         .operation
         .parameters
         .iter()
         .filter_map(|parameter| parameter.as_item())
-        // TODO support optional parameters
         .filter(|parameter| parameter_is_required(parameter))
     {
         let param_name = &parameter.parameter_data_ref().name.to_owned();
@@ -617,9 +695,51 @@ fn edit_request(
             _ => todo!(),
         }
     }
+}
 
-    // TODO set query parameters
+fn edit_optional_parameters(
+    _selected_profile: &TicProfile,
+    _selected_api: &ApiDefinition,
+    selected_operation: &TicOperation,
+    _env_data: &mut HashMap<String, String>,
+    data: &mut HashMap<String, String>,
+    _decoding_key: &DecodingKey,
+) {
+    for parameter in selected_operation
+        .operation
+        .parameters
+        .iter()
+        .filter_map(|parameter| parameter.as_item())
+        .filter(|parameter| !parameter_is_required(parameter))
+    {
+        let param_name = &parameter.parameter_data_ref().name.to_owned();
+        // TODO search for options/data/ids
+        // in the environment and use fuzzy
+        // search and autocomplete
+        match Text::new(&format_parameter_name(parameter))
+            .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
+            .prompt()
+        {
+            Ok(ok) => {
+                if ok.is_empty() {
+                    data.remove(&param_name.to_owned());
+                } else {
+                    data.insert(param_name.to_owned(), ok.to_owned());
+                }
+            }
+            Err(InquireError::OperationCanceled) => return,
+            Err(InquireError::OperationInterrupted) => std::process::exit(0),
+            _ => todo!(),
+        }
+    }
+}
 
+fn check_and_edit_token(
+    config: &TicConfig,
+    selected_profile: &TicProfile,
+    env_data: &mut HashMap<String, String>,
+    decoding_key: &DecodingKey,
+) {
     if let Some(token) = env_data.get(&selected_profile.env) {
         match jsonwebtoken::decode::<Jwt>(
             token,
@@ -662,37 +782,22 @@ fn edit_request(
         // TODO print when token expires
     }
 
-    if let Method::GET = selected_operation.method {
-    } else {
-        match Editor::new("body")
-            .with_predefined_text(
-                data.get(&operation_data_key(selected_operation))
-                    .unwrap_or(&String::new()),
-            )
-            .with_file_extension(".json")
-            .prompt()
-        {
-            Ok(ok) => {
-                if !ok.is_empty() {
-                    data.insert(operation_data_key(selected_operation), ok);
-                }
-            }
-            Err(InquireError::OperationCanceled) => (),
-            Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
-        };
-    }
+    save_env(config, selected_profile, env_data)
 }
 
 fn send_request(
+    config: &TicConfig,
     selected_profile: &TicProfile,
+    decoding_key: &DecodingKey,
     selected_api: &ApiDefinition,
     selected_operation: &TicOperation,
     env_data: &mut HashMap<String, String>,
     data: &mut HashMap<String, String>,
 ) {
-    // TODO move verifying and entering of token to here
-    // TODO verify that all required parameters and token exists
+    // TODO do not send request if this is cancelled
+    check_and_edit_token(config, selected_profile, env_data, decoding_key);
+
+    // TODO verify that all required parameters exists
 
     let body: String = data
         .get(&operation_data_key(selected_operation))
