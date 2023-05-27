@@ -382,8 +382,6 @@ fn build_request_path(
         .parameters
         .iter()
         .filter_map(|parameter| parameter.as_item())
-        // TODO support optional parameters
-        .filter(|parameter| parameter_is_required(parameter))
         .for_each(|parameter| {
             match parameter {
                 openapiv3::Parameter::Path { parameter_data, .. } => {
@@ -405,20 +403,20 @@ fn build_request_path(
                     }
                 }
                 openapiv3::Parameter::Query { parameter_data, .. } => {
-                    if use_colored {
+                    let parameter_value = data.get(&parameter_data.name);
+                    if parameter_data.required || parameter_value.is_some() {
                         query_params.push((
                             parameter_data.name.to_owned(),
-                            data.get(&parameter_data.name)
-                                .map(|n| n.green())
-                                .unwrap_or_else(|| String::from("<missing>").red())
-                                .to_string(),
-                        ));
-                    } else {
-                        query_params.push((
-                            parameter_data.name.to_owned(),
-                            data.get(&parameter_data.name)
-                                .unwrap_or(&String::from("<missing>"))
-                                .to_owned(),
+                            if use_colored {
+                                parameter_value
+                                    .map(|n| n.green())
+                                    .unwrap_or_else(|| String::from("<missing>").red())
+                                    .to_string()
+                            } else {
+                                parameter_value
+                                    .unwrap_or(&String::from("<missing>"))
+                                    .to_owned()
+                            },
                         ));
                     }
                 }
