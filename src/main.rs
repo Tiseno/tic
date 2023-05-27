@@ -264,18 +264,13 @@ fn select_api_loop(
         let selected_api_index = match Select::new(
             "api",
             apis.iter()
-                .map(
-                    |ApiDefinition {
-                         domain: _,
-                         open_api,
-                     }| {
-                        format!(
-                            "{} {}",
-                            open_api.info.title.clone(),
-                            open_api.info.version.clone()
-                        )
-                    },
-                )
+                .map(|ApiDefinition { open_api, .. }| {
+                    format!(
+                        "{} {}",
+                        open_api.info.title.clone(),
+                        open_api.info.version.clone()
+                    )
+                })
                 .collect(),
         )
         .with_vim_mode(true)
@@ -336,14 +331,7 @@ fn select_operation_loop(
             "request",
             operations
                 .iter()
-                .map(
-                    |TicOperation {
-                         name,
-                         path: _,
-                         method: _,
-                         operation: _,
-                     }| name,
-                )
+                .map(|TicOperation { name, .. }| name)
                 .collect(),
         )
         .with_vim_mode(true)
@@ -387,6 +375,8 @@ fn build_request_path(
         selected_operation.path
     );
 
+    let mut query_params: Vec<(String, String)> = Vec::new();
+
     selected_operation
         .operation
         .parameters
@@ -396,10 +386,7 @@ fn build_request_path(
         .filter(|parameter| parameter_is_required(parameter))
         .for_each(|parameter| {
             match parameter {
-                openapiv3::Parameter::Path {
-                    parameter_data,
-                    style: _,
-                } => {
+                openapiv3::Parameter::Path { parameter_data, .. } => {
                     if use_colored {
                         full_path_with_parameters = full_path_with_parameters.replace(
                             &format!("{{{}}}", &parameter_name(parameter)),
@@ -417,80 +404,76 @@ fn build_request_path(
                         );
                     }
                 }
-                openapiv3::Parameter::Query {
-                    parameter_data: _,
-                    allow_reserved: _,
-                    style: _,
-                    allow_empty_value: _,
-                } => {
-                    todo!()
+                openapiv3::Parameter::Query { parameter_data, .. } => {
+                    if use_colored {
+                        query_params.push((
+                            parameter_data.name.to_owned(),
+                            data.get(&parameter_data.name)
+                                .map(|n| n.green())
+                                .unwrap_or_else(|| String::from("<missing>").red())
+                                .to_string(),
+                        ));
+                    } else {
+                        query_params.push((
+                            parameter_data.name.to_owned(),
+                            data.get(&parameter_data.name)
+                                .unwrap_or(&String::from("<missing>"))
+                                .to_owned(),
+                        ));
+                    }
                 }
                 _ => todo!(),
             };
         });
 
-    full_path_with_parameters
+    if query_params.len() == 0 {
+        return full_path_with_parameters;
+    }
+
+    let query_string = query_params
+        .iter()
+        .map(|(name, value)| format!("{}={}", name, value))
+        .collect::<Vec<String>>()
+        .join("&");
+
+    format!("{}?{}", full_path_with_parameters, query_string)
 }
 
 fn parameter_name(parameter: &openapiv3::Parameter) -> String {
     match parameter {
-        openapiv3::Parameter::Path {
-            parameter_data,
-            style: _,
-        } => parameter_data.name.to_owned(),
-        openapiv3::Parameter::Query {
-            parameter_data,
-            allow_reserved: _,
-            style: _,
-            allow_empty_value: _,
-        } => parameter_data.name.to_owned(),
+        openapiv3::Parameter::Path { parameter_data, .. }
+        | openapiv3::Parameter::Query { parameter_data, .. } => parameter_data.name.to_owned(),
         _ => todo!(),
     }
 }
 
 fn parameter_is_required(parameter: &openapiv3::Parameter) -> bool {
     match parameter {
-        openapiv3::Parameter::Path {
-            parameter_data,
-            style: _,
-        } => parameter_data.required,
-        openapiv3::Parameter::Query {
-            parameter_data,
-            allow_reserved: _,
-            style: _,
-            allow_empty_value: _,
-        } => parameter_data.required,
+        openapiv3::Parameter::Path { parameter_data, .. }
+        | openapiv3::Parameter::Query { parameter_data, .. } => parameter_data.required,
         _ => todo!(),
+    }
+}
+
+fn optional_suffix(required: bool) -> &'static str {
+    if required {
+        ""
+    } else {
+        " (optional)"
     }
 }
 
 fn format_parameter_name(parameter: &openapiv3::Parameter) -> String {
     match parameter {
-        openapiv3::Parameter::Path {
-            parameter_data,
-            style: _,
-        } => format!(
+        openapiv3::Parameter::Path { parameter_data, .. } => format!(
             "{{{}}}{}",
             parameter_data.name.to_owned(),
-            if parameter_data.required.to_owned() {
-                ""
-            } else {
-                " (optional)"
-            }
+            optional_suffix(parameter_data.required),
         ),
-        openapiv3::Parameter::Query {
-            parameter_data,
-            allow_reserved: _,
-            style: _,
-            allow_empty_value: _,
-        } => format!(
+        openapiv3::Parameter::Query { parameter_data, .. } => format!(
             "?{}{}",
             parameter_data.name.to_owned(),
-            if parameter_data.required.to_owned() {
-                ""
-            } else {
-                " (optional)"
-            }
+            optional_suffix(parameter_data.required),
         ),
         _ => todo!(),
     }
