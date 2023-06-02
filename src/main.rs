@@ -424,7 +424,7 @@ fn build_request_path(
             };
         });
 
-    if query_params.len() == 0 {
+    if query_params.is_empty() {
         return full_path_with_parameters;
     }
 
@@ -445,7 +445,7 @@ fn parameter_name(parameter: &openapiv3::Parameter) -> String {
     }
 }
 
-fn parameter_is_required(parameter: &openapiv3::Parameter) -> bool {
+fn parameter_is_required(parameter: &&openapiv3::Parameter) -> bool {
     match parameter {
         openapiv3::Parameter::Path { parameter_data, .. }
         | openapiv3::Parameter::Query { parameter_data, .. } => parameter_data.required,
@@ -554,24 +554,12 @@ fn request_loop(
                 );
                 save_data(config, selected_profile, data)
             } else if a == "edit required parameters" {
-                edit_required_parameters(
-                    selected_profile,
-                    selected_api,
-                    selected_operation,
-                    env_data,
-                    data,
-                    decoding_key,
-                );
+                edit_parameters(selected_operation, data, parameter_is_required);
                 save_data(config, selected_profile, data)
             } else if a == "edit optional parameters" {
-                edit_optional_parameters(
-                    selected_profile,
-                    selected_api,
-                    selected_operation,
-                    env_data,
-                    data,
-                    decoding_key,
-                );
+                edit_parameters(selected_operation, data, |parameter| {
+                    !parameter_is_required(parameter)
+                });
                 save_data(config, selected_profile, data)
             } else if a == "invalidate all optional parameters" {
                 println!("Not implemented.")
@@ -641,57 +629,19 @@ fn edit_body(
     };
 }
 
-fn edit_required_parameters(
-    _selected_profile: &TicProfile,
-    _selected_api: &ApiDefinition,
+fn edit_parameters<P>(
     selected_operation: &TicOperation,
-    _env_data: &mut HashMap<String, String>,
     data: &mut HashMap<String, String>,
-    _decoding_key: &DecodingKey,
-) {
+    filter: P,
+) where
+    P: Fn(&&openapiv3::Parameter) -> bool,
+{
     for parameter in selected_operation
         .operation
         .parameters
         .iter()
         .filter_map(|parameter| parameter.as_item())
-        .filter(|parameter| parameter_is_required(parameter))
-    {
-        let param_name = &parameter.parameter_data_ref().name.to_owned();
-        // TODO search for options/data/ids
-        // in the environment and use fuzzy
-        // search and autocomplete
-        match Text::new(&format_parameter_name(parameter))
-            .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
-            .prompt()
-        {
-            Ok(ok) => {
-                if ok.is_empty() {
-                    data.remove(&param_name.to_owned());
-                } else {
-                    data.insert(param_name.to_owned(), ok.to_owned());
-                }
-            }
-            Err(InquireError::OperationCanceled) => return,
-            Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
-        }
-    }
-}
-
-fn edit_optional_parameters(
-    _selected_profile: &TicProfile,
-    _selected_api: &ApiDefinition,
-    selected_operation: &TicOperation,
-    _env_data: &mut HashMap<String, String>,
-    data: &mut HashMap<String, String>,
-    _decoding_key: &DecodingKey,
-) {
-    for parameter in selected_operation
-        .operation
-        .parameters
-        .iter()
-        .filter_map(|parameter| parameter.as_item())
-        .filter(|parameter| !parameter_is_required(parameter))
+        .filter(filter)
     {
         let param_name = &parameter.parameter_data_ref().name.to_owned();
         // TODO search for options/data/ids

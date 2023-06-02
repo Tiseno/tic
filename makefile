@@ -1,5 +1,5 @@
 default:
-	cargo run
+	cargo run -q
 
 release:
 	cargo build -r
