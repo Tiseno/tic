@@ -1,17 +1,17 @@
 {
   "data_paths": [
-    { "name": "test", "path": "/home/path/to/.tic/test-data.json" },
-    { "name": "prod", "path": "/home/path/to/.tic/prod-data.json" }
+    { "name": "test", "path": "/home/example/.tic/test-data.json" },
+    { "name": "prod", "path": "/home/example/.tic/prod-data.json" }
   ],
   "environments": [
-    { "name": "test", "path": "/home/.tic/test-env.json", "public_pem_path": "/path/to/public/key.pem" },
-    { "name": "prod", "path": "/home/.tic/prod-env.json", "public_pem_path": "/path/to/public/key.pem" }
+    { "name": "test", "path": "/home/example/.tic/test-env.json", "public_pem_path": "/path/to/public/key.test.pem" },
+    { "name": "prod", "path": "/home/example/.tic/prod-env.json", "public_pem_path": "/path/to/public/key.pem" }
   ],
   "profiles": [
-    { "name": "dev1", "setup": "local1", "env": "test", "data": "test" },
-    { "name": "dev2", "setup": "local2", "env": "test", "data": "test2" },
-    { "name": "test", "setup": "test", "env": "test", "data": "test" },
-    { "name": "prod", "setup": "prod", "env": "prod", "data": "prod" }
+    { "name": "dev1", "protocol": "http", "tld": "local:3000", "env": "test", "data": "test" },
+    { "name": "dev2", "protocol": "http", "tld": "test", "env": "test", "data": "test2" },
+    { "name": "test", "protocol": "https", "tld": "test", "env": "test", "data": "test" },
+    { "name": "prod", "protocol": "https", "tld": "com", "env": "prod", "data": "prod" }
   ],
   "apis": [
     { "domain": "service1.url.", "path": "/path/to/service1/openapi.json" },
