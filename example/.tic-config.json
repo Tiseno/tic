@@ -1,0 +1,15 @@
+{
+  "data_paths": [
+    { "name": "example", "path": "example-data.json" }
+  ],
+  "environments": [
+    { "name": "example", "path": "example-env.json", "public_pem_path": ".example.public.pem" }
+  ],
+  "profiles": [
+    { "name": "local", "protocol": "http", "tld": "local:3000", "env": "example", "data": "example" },
+    { "name": "test", "protocol": "http", "tld": "test", "env": "example", "data": "example" }
+  ],
+  "apis": [
+    { "domain": "myservice.", "path": "./openapi.json" }
+  ]
+}

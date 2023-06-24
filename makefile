@@ -9,3 +9,7 @@ install:
 
 watch:
 	cargo watch -c -x clippy
+
+run-example:
+	cargo build
+	sh -c "cd example && ../target/debug/tic"

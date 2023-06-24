@@ -1,0 +1,49 @@
+{
+  "openapi": "3.0.0",
+  "paths": {
+    "/some-resource/{id}": {
+      "get": {
+        "operationId": "GetSomeResource",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "format": "uuid",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {}
+          }
+        }
+      }
+    }
+  },
+  "info": {
+    "title": "My example service",
+    "version": "0.1.0",
+    "contact": {}
+  },
+  "tags": [],
+  "servers": [],
+  "components": {
+    "securitySchemes": {
+      "bearer": {
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "type": "http"
+      }
+    },
+    "schemas": {}
+  },
+  "security": [
+    {
+      "bearer": []
+    }
+  ]
+}

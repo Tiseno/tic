@@ -1,6 +1,8 @@
 # tic
 Command line http client.
 
+![example usage](./example/example.gif)
+
 ## Features
 * Reading openapi files from predefined locations
 * Profiles for different setups and environments
@@ -28,4 +30,8 @@ Each containing a name, a path referring to a json file which will persist data 
 
 #### environments
 Each containing a name, a path referring to a json file which will persist any token entered, and a path to a public key for jwt validation.
+
+## Example
+The example folder contains a full working configuration with a dummy openapi, public pem key, and data files.
+To try it run `make run-example` which will build a debug version and run it from the example directory.
 
