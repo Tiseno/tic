@@ -71,8 +71,12 @@ fn read_openapi_from_path_with_removed_security_schemes(path: &str) -> OpenAPI {
         })
         .remove("securitySchemes");
 
-    let api: OpenAPI = serde_json::from_str(&val.to_string())
-        .unwrap_or_else(|_| panic!("Could not deserialize '{}' openapi to OpenAPI", path));
+    let api: OpenAPI = serde_json::from_str(&val.to_string()).unwrap_or_else(|err| {
+        panic!(
+            "Could not deserialize '{}' openapi to OpenAPI with error: {}",
+            path, err
+        )
+    });
 
     api
 }
