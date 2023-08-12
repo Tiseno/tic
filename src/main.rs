@@ -100,7 +100,6 @@ struct TicProfile {
     protocol: String,
     tld: String,
     env: String,
-    #[allow(dead_code)]
     data: String,
 }
 
@@ -128,7 +127,6 @@ struct TicOperation {
     name: String,
     path: String,
     method: Method,
-    #[allow(dead_code)]
     operation: Operation,
 }
 
@@ -525,7 +523,6 @@ fn request_loop(
                 "edit body",
                 "edit required parameters",
                 "edit optional parameters",
-                "invalidate all optional parameters",
                 "invalidate token",
             ],
         )
@@ -578,8 +575,6 @@ fn request_loop(
                     !parameter_is_required(parameter)
                 });
                 save_data(config, selected_profile, data)
-            } else if a == "invalidate all optional parameters" {
-                println!("Not implemented.")
             }
         }
     }
