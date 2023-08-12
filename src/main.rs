@@ -190,67 +190,80 @@ fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
 
         let selected_profile = &config.profiles[selected_profile_index];
 
-        match config
-            .environments
-            .iter()
-            .find(|a| a.name.eq(&selected_profile.env))
+        match config.environments.iter().find(|a| a.name.eq(&selected_profile.env))
         {
+            None =>
+                println!(
+                "Could not find environment with name '{}' in configuration specified by profile '{}'.",
+                selected_profile.env, selected_profile.name,
+            ),
             Some(environment) => {
                 let pem_string = match fs::read_to_string(&environment.public_pem_path) {
                     Ok(ok) => ok,
                     Err(err) => {
-                        println!("Error reading pem file {}", err);
-                        break;
+                        println!("Could not read {} pem file {}: {}", environment.name, environment.public_pem_path, err);
+                        continue;
+                    }
+                };
+                let decoding_key = match jsonwebtoken::DecodingKey::from_rsa_pem(pem_string.as_bytes()) {
+                    Ok(ok) => ok,
+                    Err(err) => {
+                        println!("Could not deserialize {} pem file {}: {}", environment.name, environment.public_pem_path, err);
+                        continue;
                     }
                 };
 
-                let decoding_key =
-                    &jsonwebtoken::DecodingKey::from_rsa_pem(pem_string.as_bytes()).unwrap();
+                let saved_env_data_string = match fs::read_to_string(&environment.path) {
+                    Ok(ok) => ok,
+                    Err(err) => {
+                        println!("Could not read env {} data file {}: {}", environment.name, environment.path, err);
+                        continue;
+                    }
+                };
+                let mut env_data = match serde_json::from_str(&saved_env_data_string) {
+                    Ok(ok) => ok,
+                    Err(err) => {
+                        println!("Could not deserialize env {} data file {}: {}", environment.name, environment.path, err);
+                        continue;
+                    }
+                };
 
                 let mut data = std::collections::HashMap::<String, String>::new();
 
+                // TODO make data optional instead to make this nicer
                 if let Some(data_path) = config
                     .data_paths
                     .iter()
-                    .find(|e| e.name == environment.name)
+                    .find(|e| e.name == selected_profile.data)
                 {
-                    // TODO do this nicer when we do not have a data file
-                    let saved_data_string = fs::read_to_string(&data_path.path)
-                        .expect("Could not find specified data file");
+                    let saved_data_string = match fs::read_to_string(&data_path.path) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            println!("Could not read {} data file {}: {}", data_path.name, data_path.path, err);
+                            continue;
+                        }
+                    };
                     let saved_data: HashMap<String, String> =
-                        serde_json::from_str(&saved_data_string).unwrap();
+                        match serde_json::from_str(&saved_data_string) {
+                        Ok(ok) => ok,
+                        Err(err) => {
+                            println!("Could not deserialize {} data file {}: {}", data_path.name, data_path.path, err);
+                            continue;
+                        }
+                    };
                     data = saved_data;
-                }
-
-                let mut env_data = std::collections::HashMap::<String, String>::new();
-
-                if let Some(environment) = config
-                    .environments
-                    .iter()
-                    .find(|e| e.name == selected_profile.env)
-                {
-                    // TODO do this nicer when we do not have a data file
-                    let saved_data_string = fs::read_to_string(&environment.path)
-                        .expect("Could not find specified data file");
-                    let saved_data: HashMap<String, String> =
-                        serde_json::from_str(&saved_data_string).unwrap();
-                    env_data = saved_data;
+                } else {
+                    println!("No data path specified for {}: not persisting data", selected_profile.data);
                 }
 
                 select_api_loop(
                     &config,
                     selected_profile,
-                    decoding_key,
+                    &decoding_key,
                     &apis,
                     &mut env_data,
                     &mut data,
                 );
-            }
-            None => {
-                println!(
-                "Could not find environment with name '{}' in configuration specified by profile '{}'.",
-                selected_profile.env, selected_profile.name,
-            );
             }
         }
     }
