@@ -6,7 +6,7 @@ use reqwest::Method;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, env, fs};
 
-fn colorize_json_value(value: &serde_json::Value) -> String {
+fn json_to_colorized_string(value: &serde_json::Value) -> String {
     match value {
         serde_json::Value::Null => "null".bright_black().to_string(),
         serde_json::Value::Bool(b) => b.to_string().purple().to_string(),
@@ -15,7 +15,7 @@ fn colorize_json_value(value: &serde_json::Value) -> String {
         serde_json::Value::Array(arr) => {
             let elements: Vec<String> = arr
                 .iter()
-                .map(colorize_json_value)
+                .map(json_to_colorized_string)
                 .map(|e| e.to_string())
                 .collect();
             format!("[{}]", elements.join(", ")).to_string()
@@ -27,7 +27,7 @@ fn colorize_json_value(value: &serde_json::Value) -> String {
                     format!(
                         "{}: {}",
                         format!("\"{}\"", key).yellow().to_string(),
-                        colorize_json_value(value)
+                        json_to_colorized_string(value)
                     )
                 })
                 .map(|e| e.to_string())
@@ -42,7 +42,7 @@ struct Jwt {
     pub exp: u64,
 }
 
-fn json_formatter(s: String) -> Result<String, serde_json::Error> {
+fn validate_and_format_json_string(s: String) -> Result<String, serde_json::Error> {
     let json_value: serde_json::Value = serde_json::from_str(&s)?;
 
     serde_json::to_string_pretty(&json_value)
@@ -221,7 +221,7 @@ fn create_setup_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
             Ok(i) => i,
             Err(InquireError::OperationCanceled) => break,
             Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
+            e => panic!("{:?}", e),
         };
 
         let profile = &config.profile[selected_profile_index];
@@ -269,7 +269,7 @@ fn create_setup_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
         };
         let mut auth_data = std::collections::HashMap::<String, String>::new();
         if let Some(auth_path) = &auth.path {
-            let saved_auth_data_string = match fs::read_to_string(&auth_path) {
+            let saved_auth_data_string = match fs::read_to_string(auth_path) {
                 Ok(ok) => ok,
                 Err(err) => {
                     println!(
@@ -392,7 +392,7 @@ fn select_api_loop(setup: &mut TicSetup, apis: &[ApiDefinition]) {
             Ok(i) => i,
             Err(InquireError::OperationCanceled) => break,
             Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
+            e => panic!("{:?}", e),
         };
 
         let api = &apis[selected_api_index];
@@ -435,11 +435,9 @@ fn select_operation_loop(setup: &mut TicSetup, api: &ApiDefinition, operations: 
         .map(|op| op.index)
         {
             Ok(i) => i,
-            Err(InquireError::OperationCanceled) => {
-                break;
-            }
+            Err(InquireError::OperationCanceled) => break,
             Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
+            e => panic!("{:?}", e),
         };
 
         let operation = &operations[selected_operation_index];
@@ -507,7 +505,7 @@ fn build_request_path(
                         ));
                     }
                 }
-                _ => todo!(),
+                e => panic!("Parameters of this type are not supported: {:?}", e),
             };
         });
 
@@ -528,7 +526,7 @@ fn parameter_name(parameter: &openapiv3::Parameter) -> String {
     match parameter {
         openapiv3::Parameter::Path { parameter_data, .. }
         | openapiv3::Parameter::Query { parameter_data, .. } => parameter_data.name.to_owned(),
-        _ => todo!(),
+        e => panic!("Parameters of this type are not supported: {:?}", e),
     }
 }
 
@@ -536,7 +534,7 @@ fn parameter_is_required(parameter: &&openapiv3::Parameter) -> bool {
     match parameter {
         openapiv3::Parameter::Path { parameter_data, .. }
         | openapiv3::Parameter::Query { parameter_data, .. } => parameter_data.required,
-        _ => todo!(),
+        e => panic!("Parameters of this type are not supported: {:?}", e),
     }
 }
 
@@ -560,7 +558,7 @@ fn format_parameter_name(parameter: &openapiv3::Parameter) -> String {
             parameter_data.name.to_owned(),
             optional_suffix(parameter_data.required),
         ),
-        _ => todo!(),
+        e => panic!("Parameters of this type are not supported: {:?}", e),
     }
 }
 
@@ -569,7 +567,6 @@ fn request_loop(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperat
         let full_path_with_parameters = build_request_path(setup, api, operation, true);
         println!("{} {}", operation.method, full_path_with_parameters);
 
-        // TODO print the current body
         // TODO hide edit body for get requests
         let a = match Select::new(
             "",
@@ -587,7 +584,7 @@ fn request_loop(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperat
             Ok(ok) => ok,
             Err(InquireError::OperationCanceled) => break,
             Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
+            e => panic!("{:?}", e),
         };
         if a == "send" {
             send_request(setup, api, operation);
@@ -653,7 +650,7 @@ fn edit_body(operation: &TicOperation, data: &mut HashMap<String, String>) {
         }
         Err(InquireError::OperationCanceled) => (),
         Err(InquireError::OperationInterrupted) => std::process::exit(0),
-        _ => todo!(),
+        e => panic!("{:?}", e),
     };
 }
 
@@ -669,7 +666,6 @@ where
         .filter(filter)
     {
         let param_name = &parameter.parameter_data_ref().name.to_owned();
-        // TODO search for configured options/data/ids and use fuzzy search and autocomplete
         match Text::new(&format_parameter_name(parameter))
             .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
             .prompt()
@@ -683,7 +679,7 @@ where
             }
             Err(InquireError::OperationCanceled) => return,
             Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
+            e => panic!("{:?}", e),
         }
     }
 }
@@ -720,7 +716,6 @@ fn check_and_edit_token(setup: &mut TicSetup) {
         };
 
         // TODO make empty string a valid option to send the request without auth
-        // and cancel should not send the request
         let valid_token = match Editor::new(&format!("token for {}", setup.auth_name))
             .with_validator(validator)
             .prompt()
@@ -728,7 +723,7 @@ fn check_and_edit_token(setup: &mut TicSetup) {
             Ok(ok) => ok,
             Err(InquireError::OperationCanceled) => return,
             Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            _ => todo!(),
+            e => panic!("{:?}", e),
         };
 
         setup
@@ -741,7 +736,6 @@ fn check_and_edit_token(setup: &mut TicSetup) {
 }
 
 fn send_request(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperation) {
-    // TODO do not send request if this is cancelled
     check_and_edit_token(setup);
 
     // TODO verify that all required parameters exists
@@ -758,7 +752,7 @@ fn send_request(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperat
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap()
-        .request(operation.method.to_owned(), &full_path_with_parameters)
+        .request(operation.method.to_owned(), full_path_with_parameters)
         .body(body)
         .header(
             // TODO do not set auth header if no token
@@ -775,42 +769,42 @@ fn send_request(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperat
         .send()
     {
         Ok(response) => {
-            let res: String = response
+            let response_text: String = response
                 .text()
                 .expect("Could not get response text")
                 .chars()
-                .into_iter()
                 .collect();
 
             const LIMIT: usize = 1000;
-            let rrr = serde_json::from_str(&res);
-            match &rrr {
+            match &serde_json::from_str(&response_text) {
                 Ok(ok) => {
-                    let colorized = colorize_json_value(ok);
+                    let colorized = json_to_colorized_string(ok);
                     println!("{}", colorized.chars().take(LIMIT).collect::<String>());
-                    if res.len() > LIMIT {
+                    // TODO this does not reset color when we cut the colorized string arbitrarily
+                    if response_text.len() > LIMIT {
                         println!("...");
                     }
                 }
                 Err(_) => {
-                    println!("{}", res.chars().take(LIMIT).collect::<String>());
-                    if res.len() > LIMIT {
+                    println!("{}", response_text.chars().take(LIMIT).collect::<String>());
+                    if response_text.len() > LIMIT {
                         println!("...");
                     }
                 }
             }
 
-            let formatted_res = json_formatter(res.clone()).unwrap_or(res);
+            let formatted_response_text =
+                validate_and_format_json_string(response_text.clone()).unwrap_or(response_text);
 
             match Editor::new("response body")
-                .with_predefined_text(&formatted_res)
+                .with_predefined_text(&formatted_response_text)
                 .with_file_extension(".json")
                 .prompt()
             {
                 Ok(_) => (),
                 Err(InquireError::OperationCanceled) => (),
                 Err(InquireError::OperationInterrupted) => std::process::exit(0),
-                _ => todo!(),
+                e => panic!("{:?}", e),
             };
         }
         Err(err) => println!("{}", err),
