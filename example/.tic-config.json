@@ -1,5 +1,6 @@
 {
   "profile": [
+    { "name": "custom", "auth": "test" },
     { "name": "local", "env": "local", "auth": "test", "data": "test" },
     { "name": "test", "env": "test", "auth": "test", "data": "test" },
     { "name": "prod", "env": "test", "auth": "prod" }

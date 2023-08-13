@@ -81,15 +81,16 @@ fn read_openapi_from_path_with_removed_security_schemes(path: &str) -> OpenAPI {
     api
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct TicProfileConfig {
     name: String,
     env: Option<String>,
     auth: Option<String>,
+    // TODO make auth data path configured separately from auth
     data: Option<String>,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct TicEnvConfig {
     name: String,
     protocol: String,
@@ -102,7 +103,7 @@ struct TicDataConfig {
     path: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct TicAuthConfig {
     name: String,
     path: Option<String>,
@@ -200,49 +201,46 @@ fn main() {
         })
         .collect();
 
-    create_setup_loop(config, apis);
+    create_setup_loop(&config, apis);
 }
 
-fn create_setup_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
+fn create_setup_loop(config: &TicConfig, apis: Vec<ApiDefinition>) {
     loop {
-        // TODO if no profiles are configured, prompt for all parts
-        let selected_profile_index = match Select::new(
-            "profile",
-            config
-                .profile
-                .iter()
-                .map(|profile| profile.name.to_owned())
-                .collect(),
-        )
-        .with_vim_mode(true)
-        .raw_prompt()
-        .map(|op| op.index)
-        {
-            Ok(i) => i,
-            Err(InquireError::OperationCanceled) => break,
-            Err(InquireError::OperationInterrupted) => std::process::exit(0),
-            e => panic!("{:?}", e),
+        let profile = match get_optional_profile(config) {
+            Some(ok) => ok,
+            None => {
+                // TODO make this nicer?
+                if config.profile.is_empty() {
+                    continue;
+                } else {
+                    break;
+                };
+            }
         };
 
-        let profile = &config.profile[selected_profile_index];
         #[cfg(debug_assertions)]
         dbg!(&profile);
 
-        let profile_auth = profile
-            .auth
-            .as_ref()
-            .expect("Optional profile auth is not implemented yet");
-
-        let auth = match config.auth.iter().find(|e| e.name.eq(profile_auth)) {
-            Some(auth) => auth,
+        let env = match get_optional_env_config(config, &profile.env) {
+            Some(ok) => ok,
             None => {
-                println!(
-                    "Could not find auth with name '{}' in configuration specified by profile '{}'",
-                    profile_auth, profile.name,
-                );
-                continue;
+                // TODO make this nicer?
+                if config.profile.is_empty() {
+                    break;
+                } else {
+                    continue;
+                };
             }
         };
+
+        #[cfg(debug_assertions)]
+        dbg!(&env);
+
+        let auth = match get_optional_auth_config(config, profile.auth.as_ref()) {
+            Some(ok) => ok,
+            None => continue,
+        };
+
         #[cfg(debug_assertions)]
         dbg!(&auth);
         let pem_string = match fs::read_to_string(&auth.public_pem_path) {
@@ -295,26 +293,9 @@ fn create_setup_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
         #[cfg(debug_assertions)]
         dbg!(&auth_data);
 
-        let profile_env = profile
-            .env
-            .as_ref()
-            .expect("Optional profile env is not implemented yet");
-
-        let env = match config.env.iter().find(|e| e.name.eq(profile_env)) {
-            Some(env) => env,
-            None => {
-                println!(
-                    "Could not find env with name '{}' in configuration specified by profile '{}'",
-                    profile_env, profile.name,
-                );
-                continue;
-            }
-        };
-        #[cfg(debug_assertions)]
-        dbg!(&env);
-
         let mut data = std::collections::HashMap::<String, String>::new();
 
+        // TODO prompt for data config if missing
         let data_path = match &profile.data {
             None => None,
             Some(data_name) => {
@@ -369,6 +350,107 @@ fn create_setup_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
 
         select_api_loop(&mut setup, &apis);
     }
+}
+
+fn get_optional_profile(config: &TicConfig) -> Option<TicProfileConfig> {
+    if config.profile.is_empty() {
+        return Some(TicProfileConfig {
+            name: String::from("custom"),
+            env: None,
+            auth: None,
+            data: None,
+        });
+    }
+
+    let selected_profile_index = match Select::new(
+        "profile",
+        config
+            .profile
+            .iter()
+            .map(|profile| profile.name.to_owned())
+            .collect(),
+    )
+    .with_vim_mode(true)
+    .raw_prompt()
+    .map(|op| op.index)
+    {
+        Ok(i) => i,
+        Err(InquireError::OperationCanceled) => return None,
+        Err(InquireError::OperationInterrupted) => std::process::exit(0),
+        e => panic!("{:?}", e),
+    };
+
+    Some(config.profile[selected_profile_index].clone())
+}
+
+fn get_optional_auth_config(
+    config: &TicConfig,
+    profile_auth: Option<&String>,
+) -> Option<TicAuthConfig> {
+    if let Some(auth) = profile_auth {
+        return Some(
+            config
+                .auth
+                .iter()
+                .find(|e| e.name.eq(auth))
+                .unwrap_or_else(|| {
+                    panic!("Could not find auth with name '{}' in configuration", auth)
+                })
+                .clone(),
+        );
+    }
+
+    // TODO throw descriptive error if config.auth is empty as we cannot prompt select on it
+    let selected_auth_index = match Select::new(
+        "auth",
+        config.auth.iter().map(|e| e.name.to_owned()).collect(),
+    )
+    .with_vim_mode(true)
+    .raw_prompt()
+    .map(|op| op.index)
+    {
+        Ok(i) => i,
+        Err(InquireError::OperationCanceled) => return None,
+        Err(InquireError::OperationInterrupted) => std::process::exit(0),
+        e => panic!("{:?}", e),
+    };
+
+    Some(config.auth[selected_auth_index].clone())
+}
+
+fn get_optional_env_config(
+    config: &TicConfig,
+    profile_env: &Option<String>,
+) -> Option<TicEnvConfig> {
+    if let Some(env) = profile_env {
+        return Some(
+            config
+                .env
+                .iter()
+                .find(|e| e.name.eq(env))
+                .unwrap_or_else(|| {
+                    panic!("Could not find env with name '{}' in configuration", env)
+                })
+                .clone(),
+        );
+    }
+
+    // TODO throw descriptive error if config.env is empty as we cannot prompt select on it
+    let selected_env_index = match Select::new(
+        "env",
+        config.env.iter().map(|e| e.name.to_owned()).collect(),
+    )
+    .with_vim_mode(true)
+    .raw_prompt()
+    .map(|op| op.index)
+    {
+        Ok(i) => i,
+        Err(InquireError::OperationCanceled) => return None,
+        Err(InquireError::OperationInterrupted) => std::process::exit(0),
+        e => panic!("{:?}", e),
+    };
+
+    Some(config.env[selected_env_index].clone())
 }
 
 fn select_api_loop(setup: &mut TicSetup, apis: &[ApiDefinition]) {
