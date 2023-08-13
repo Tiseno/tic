@@ -26,7 +26,7 @@ Will install tic into your cargo bin directory, usually `/home/username/.cargo/b
 
 ## Usage
 To use tic, you need a configuration in your current directory or home folder named `.tic-config.json`.
-`.tic-config.example.json` contains an example of what the file can contain.
+`example/.tic-config.json` contains an example of what the file can contain.
 
 #### api
 A list of services specified by a domain and the path to an openapi version 3 file in json format.
@@ -43,3 +43,4 @@ Each containing a path to a public key for jwt validation and an optional path f
 
 #### data
 Each containing a path referring to a json file which will persist data entered such as parameters and request bodies.
+Personally I keep all my data files in `~/.tic/`.

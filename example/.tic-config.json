@@ -17,7 +17,7 @@
     { "name": "test", "path": "test-data.json" }
   ],
   "api": [
-    { "domain": "myservice.", "path": "./openapi.json" },
-    { "domain": "myservice2.", "path": "./openapi.json" }
+    { "domain": "my-service.", "path": "./service-1.openapi.json" },
+    { "domain": "other-service.", "path": "./service-2.openapi.json" }
   ]
 }
