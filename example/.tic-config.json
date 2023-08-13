@@ -1,15 +1,23 @@
 {
-  "data_paths": [
-    { "name": "example", "path": "example-data.json" }
+  "profile": [
+    { "name": "local", "env": "local", "auth": "test", "data": "test" },
+    { "name": "test", "env": "test", "auth": "test", "data": "test" },
+    { "name": "prod", "env": "test", "auth": "prod" }
   ],
-  "environments": [
-    { "name": "example", "path": "example-env.json", "public_pem_path": ".example.public.pem" }
+  "env": [
+    { "name": "local", "protocol": "http", "tld": "local:3000" },
+    { "name": "test", "protocol": "https", "tld": "test" },
+    { "name": "prod", "protocol": "https", "tld": "com" }
   ],
-  "profiles": [
-    { "name": "local", "protocol": "http", "tld": "local:3000", "env": "example", "data": "example" },
-    { "name": "test", "protocol": "http", "tld": "test", "env": "example", "data": "example" }
+  "auth": [
+    { "name": "test", "path": "test-env.json", "public_pem_path": ".example.public.pem" },
+    { "name": "prod", "public_pem_path": ".example.public.pem" }
   ],
-  "apis": [
-    { "domain": "myservice.", "path": "./openapi.json" }
+  "data": [
+    { "name": "test", "path": "test-data.json" }
+  ],
+  "api": [
+    { "domain": "myservice.", "path": "./openapi.json" },
+    { "domain": "myservice2.", "path": "./openapi.json" }
   ]
 }

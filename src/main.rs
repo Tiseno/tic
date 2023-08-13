@@ -50,10 +50,10 @@ fn json_formatter(s: String) -> Result<String, serde_json::Error> {
 
 fn read_openapi_from_path_with_removed_security_schemes(path: &str) -> OpenAPI {
     let openapi_string = fs::read_to_string(path)
-        .unwrap_or_else(|_| panic!("Could not read '{}' openapi file", path));
+        .unwrap_or_else(|err| panic!("Could not read '{}' openapi file: {}", path, err));
 
     let mut val: serde_json::Value = serde_json::from_str(&openapi_string)
-        .unwrap_or_else(|_| panic!("Could not deserialize '{}' openapi", path));
+        .unwrap_or_else(|err| panic!("Could not deserialize '{}' openapi: {}", path, err));
 
     val.get_mut("components")
         .unwrap_or_else(|| {
@@ -66,19 +66,34 @@ fn read_openapi_from_path_with_removed_security_schemes(path: &str) -> OpenAPI {
         .unwrap_or_else(|| {
             panic!(
                 "Could not have ref as object to \"components\" in '{}' openapi",
-                path
+                path,
             )
         })
         .remove("securitySchemes");
 
     let api: OpenAPI = serde_json::from_str(&val.to_string()).unwrap_or_else(|err| {
         panic!(
-            "Could not deserialize '{}' openapi to OpenAPI with error: {}",
+            "Could not deserialize '{}' openapi to OpenAPI: {}",
             path, err
         )
     });
 
     api
+}
+
+#[derive(Deserialize, Debug)]
+struct TicProfileConfig {
+    name: String,
+    env: Option<String>,
+    auth: Option<String>,
+    data: Option<String>,
+}
+
+#[derive(Deserialize, Debug)]
+struct TicEnvConfig {
+    name: String,
+    protocol: String,
+    tld: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -88,19 +103,10 @@ struct TicDataConfig {
 }
 
 #[derive(Deserialize, Debug)]
-struct TicEnvironment {
+struct TicAuthConfig {
     name: String,
-    path: String,
+    path: Option<String>,
     public_pem_path: String,
-}
-
-#[derive(Deserialize, Debug)]
-struct TicProfile {
-    name: String,
-    protocol: String,
-    tld: String,
-    env: String,
-    data: String,
 }
 
 #[derive(Deserialize, Debug)]
@@ -111,10 +117,32 @@ struct TicApiPath {
 
 #[derive(Deserialize, Debug)]
 struct TicConfig {
-    data_paths: Vec<TicDataConfig>,
-    environments: Vec<TicEnvironment>,
-    profiles: Vec<TicProfile>,
-    apis: Vec<TicApiPath>,
+    profile: Vec<TicProfileConfig>,
+    env: Vec<TicEnvConfig>,
+    data: Vec<TicDataConfig>,
+    auth: Vec<TicAuthConfig>,
+    api: Vec<TicApiPath>,
+}
+
+struct TicSetup {
+    protocol: String,
+    tld: String,
+    decoding_key: DecodingKey,
+    auth_name: String,
+    auth_data: std::collections::HashMap<String, String>,
+    auth_data_path: Option<String>,
+    data: std::collections::HashMap<String, String>,
+    data_path: Option<String>,
+}
+
+impl std::fmt::Debug for TicSetup {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "TicSetup {{\n    protocol: {:?}\n    tld: {:?}\n    decoding_key: ???\n    auth_data: {:?}\n    auth_data_path: {:?}\n    data: {:?}\n    data_path: {:?}\n}}",
+            self.protocol, self.tld, self.auth_data, self.auth_data_path, self.data, self.data_path
+        )
+    }
 }
 
 struct ApiDefinition {
@@ -142,20 +170,29 @@ impl TicOperation {
 }
 
 fn main() {
+    if env::args().any(|arg| arg == "--version") {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+
     let config_string = fs::read_to_string(".tic-config.json").unwrap_or_else(|_| {
         fs::read_to_string(format!(
             "{}/{}",
             env::var("HOME").expect("Could not resolve home directory to read configuration file"),
             ".tic-config.json"
         ))
-        .expect("Could not read configuration file")
+        .expect("Could not read configuration file from HOME or current directory")
     });
+    #[cfg(debug_assertions)]
+    dbg!(&config_string);
 
     let config: TicConfig =
         serde_json::from_str(&config_string).expect("Could not parse configuration file");
+    #[cfg(debug_assertions)]
+    dbg!(&config);
 
     let apis: Vec<ApiDefinition> = config
-        .apis
+        .api
         .iter()
         .map(|TicApiPath { path, domain }| ApiDefinition {
             domain: domain.to_owned(),
@@ -163,15 +200,16 @@ fn main() {
         })
         .collect();
 
-    select_profile_loop(config, apis);
+    create_setup_loop(config, apis);
 }
 
-fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
+fn create_setup_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
     loop {
+        // TODO if no profiles are configured, prompt for all parts
         let selected_profile_index = match Select::new(
             "profile",
             config
-                .profiles
+                .profile
                 .iter()
                 .map(|profile| profile.name.to_owned())
                 .collect(),
@@ -186,95 +224,154 @@ fn select_profile_loop(config: TicConfig, apis: Vec<ApiDefinition>) {
             _ => todo!(),
         };
 
-        let selected_profile = &config.profiles[selected_profile_index];
+        let profile = &config.profile[selected_profile_index];
+        #[cfg(debug_assertions)]
+        dbg!(&profile);
 
-        match config.environments.iter().find(|a| a.name.eq(&selected_profile.env))
-        {
-            None =>
+        let profile_auth = profile
+            .auth
+            .as_ref()
+            .expect("Optional profile auth is not implemented yet");
+
+        let auth = match config.auth.iter().find(|e| e.name.eq(profile_auth)) {
+            Some(auth) => auth,
+            None => {
                 println!(
-                "Could not find environment with name '{}' in configuration specified by profile '{}'.",
-                selected_profile.env, selected_profile.name,
-            ),
-            Some(environment) => {
-                let pem_string = match fs::read_to_string(&environment.public_pem_path) {
-                    Ok(ok) => ok,
-                    Err(err) => {
-                        println!("Could not read {} pem file {}: {}", environment.name, environment.public_pem_path, err);
-                        continue;
-                    }
-                };
-                let decoding_key = match jsonwebtoken::DecodingKey::from_rsa_pem(pem_string.as_bytes()) {
-                    Ok(ok) => ok,
-                    Err(err) => {
-                        println!("Could not deserialize {} pem file {}: {}", environment.name, environment.public_pem_path, err);
-                        continue;
-                    }
-                };
+                    "Could not find auth with name '{}' in configuration specified by profile '{}'",
+                    profile_auth, profile.name,
+                );
+                continue;
+            }
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&auth);
+        let pem_string = match fs::read_to_string(&auth.public_pem_path) {
+            Ok(ok) => ok,
+            Err(err) => {
+                println!(
+                    "Could not read {} pem file {}: {}",
+                    auth.name, auth.public_pem_path, err
+                );
+                continue;
+            }
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&pem_string);
+        let decoding_key = match jsonwebtoken::DecodingKey::from_rsa_pem(pem_string.as_bytes()) {
+            Ok(ok) => ok,
+            Err(err) => {
+                println!(
+                    "Could not deserialize {} pem file {}: {}",
+                    auth.name, auth.public_pem_path, err
+                );
+                continue;
+            }
+        };
+        let mut auth_data = std::collections::HashMap::<String, String>::new();
+        if let Some(auth_path) = &auth.path {
+            let saved_auth_data_string = match fs::read_to_string(&auth_path) {
+                Ok(ok) => ok,
+                Err(err) => {
+                    println!(
+                        "Could not read auth {} data file {}: {}",
+                        auth.name, auth_path, err
+                    );
+                    continue;
+                }
+            };
+            #[cfg(debug_assertions)]
+            dbg!(&saved_auth_data_string);
+            auth_data = match serde_json::from_str(&saved_auth_data_string) {
+                Ok(ok) => ok,
+                Err(err) => {
+                    println!(
+                        "Could not deserialize auth {} data file {}: {}",
+                        auth.name, auth_path, err
+                    );
+                    continue;
+                }
+            };
+        }
+        #[cfg(debug_assertions)]
+        dbg!(&auth_data);
 
-                let saved_env_data_string = match fs::read_to_string(&environment.path) {
-                    Ok(ok) => ok,
-                    Err(err) => {
-                        println!("Could not read env {} data file {}: {}", environment.name, environment.path, err);
-                        continue;
-                    }
-                };
-                let mut env_data = match serde_json::from_str(&saved_env_data_string) {
-                    Ok(ok) => ok,
-                    Err(err) => {
-                        println!("Could not deserialize env {} data file {}: {}", environment.name, environment.path, err);
-                        continue;
-                    }
-                };
+        let profile_env = profile
+            .env
+            .as_ref()
+            .expect("Optional profile env is not implemented yet");
 
-                let mut data = std::collections::HashMap::<String, String>::new();
+        let env = match config.env.iter().find(|e| e.name.eq(profile_env)) {
+            Some(env) => env,
+            None => {
+                println!(
+                    "Could not find env with name '{}' in configuration specified by profile '{}'",
+                    profile_env, profile.name,
+                );
+                continue;
+            }
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&env);
 
-                // TODO make data optional instead to make this nicer
-                if let Some(data_path) = config
-                    .data_paths
-                    .iter()
-                    .find(|e| e.name == selected_profile.data)
-                {
-                    let saved_data_string = match fs::read_to_string(&data_path.path) {
+        let mut data = std::collections::HashMap::<String, String>::new();
+
+        let data_path = match &profile.data {
+            None => None,
+            Some(data_name) => {
+                if let Some(data_config) = config.data.iter().find(|e| e.name.eq(data_name)) {
+                    let saved_data_string = match fs::read_to_string(&data_config.path) {
                         Ok(ok) => ok,
                         Err(err) => {
-                            println!("Could not read {} data file {}: {}", data_path.name, data_path.path, err);
+                            println!(
+                                "Could not read {} data file {}: {}",
+                                data_config.name, data_config.path, err
+                            );
                             continue;
                         }
                     };
                     let saved_data: HashMap<String, String> =
                         match serde_json::from_str(&saved_data_string) {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            println!("Could not deserialize {} data file {}: {}", data_path.name, data_path.path, err);
-                            continue;
-                        }
-                    };
+                            Ok(ok) => ok,
+                            Err(err) => {
+                                println!(
+                                    "Could not deserialize {} data file {}: {}",
+                                    data_config.name, data_config.path, err
+                                );
+                                continue;
+                            }
+                        };
                     data = saved_data;
+                    Some(data_config.path.to_owned())
                 } else {
-                    println!("No data path specified for {}: not persisting data", selected_profile.data);
+                    println!(
+                        "Could not find data with name '{}' in configuration specified by profile '{}'",
+                        data_name, profile.name,
+                    );
+                    continue;
                 }
-
-                select_api_loop(
-                    &config,
-                    selected_profile,
-                    &decoding_key,
-                    &apis,
-                    &mut env_data,
-                    &mut data,
-                );
             }
-        }
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&data);
+
+        let mut setup = TicSetup {
+            protocol: env.protocol.to_owned(),
+            tld: env.tld.to_owned(),
+            decoding_key: decoding_key.clone(),
+            auth_name: auth.name.to_owned(),
+            auth_data: auth_data.clone(),
+            auth_data_path: auth.path.clone(),
+            data: data.clone(),
+            data_path,
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&setup);
+
+        select_api_loop(&mut setup, &apis);
     }
 }
 
-fn select_api_loop(
-    config: &TicConfig,
-    selected_profile: &TicProfile,
-    decoding_key: &DecodingKey,
-    apis: &[ApiDefinition],
-    env_data: &mut HashMap<String, String>,
-    data: &mut HashMap<String, String>,
-) {
+fn select_api_loop(setup: &mut TicSetup, apis: &[ApiDefinition]) {
     loop {
         let selected_api_index = match Select::new(
             "api",
@@ -298,10 +395,10 @@ fn select_api_loop(
             _ => todo!(),
         };
 
-        let selected_api = &apis[selected_api_index];
+        let api = &apis[selected_api_index];
 
         // TODO do this for all apis at the beginning instead
-        let operations: Vec<TicOperation> = selected_api
+        let operations: Vec<TicOperation> = api
             .open_api
             .paths
             .iter()
@@ -320,27 +417,11 @@ fn select_api_loop(
             .flatten()
             .collect();
 
-        select_operation_loop(
-            config,
-            data,
-            operations,
-            selected_api,
-            decoding_key,
-            selected_profile,
-            env_data,
-        );
+        select_operation_loop(setup, api, operations);
     }
 }
 
-fn select_operation_loop(
-    config: &TicConfig,
-    data: &mut HashMap<String, String>,
-    operations: Vec<TicOperation>,
-    selected_api: &ApiDefinition,
-    decoding_key: &DecodingKey,
-    selected_profile: &TicProfile,
-    env_data: &mut HashMap<String, String>,
-) {
+fn select_operation_loop(setup: &mut TicSetup, api: &ApiDefinition, operations: Vec<TicOperation>) {
     loop {
         let selected_operation_index = match Select::new(
             "request",
@@ -361,38 +442,26 @@ fn select_operation_loop(
             _ => todo!(),
         };
 
-        let selected_operation = &operations[selected_operation_index];
+        let operation = &operations[selected_operation_index];
 
-        request_loop(
-            config,
-            data,
-            selected_api,
-            decoding_key,
-            selected_profile,
-            selected_operation,
-            env_data,
-        );
+        request_loop(setup, api, operation);
     }
 }
 
 fn build_request_path(
-    selected_profile: &TicProfile,
-    selected_api: &ApiDefinition,
-    selected_operation: &TicOperation,
-    data: &mut HashMap<String, String>,
+    setup: &mut TicSetup,
+    api: &ApiDefinition,
+    operation: &TicOperation,
     use_colored: bool,
 ) -> String {
     let mut full_path_with_parameters = format!(
         "{}://{}{}{}",
-        selected_profile.protocol,
-        selected_api.domain,
-        selected_profile.tld,
-        selected_operation.path
+        setup.protocol, api.domain, setup.tld, operation.path
     );
 
     let mut query_params: Vec<(String, String)> = Vec::new();
 
-    selected_operation
+    operation
         .operation
         .parameters
         .iter()
@@ -403,7 +472,8 @@ fn build_request_path(
                     if use_colored {
                         full_path_with_parameters = full_path_with_parameters.replace(
                             &format!("{{{}}}", &parameter_name(parameter)),
-                            &data
+                            &setup
+                                .data
                                 .get(&parameter_data.name)
                                 .map(|n| n.green())
                                 .unwrap_or_else(|| String::from("<missing>").red())
@@ -412,13 +482,15 @@ fn build_request_path(
                     } else {
                         full_path_with_parameters = full_path_with_parameters.replace(
                             &format!("{{{}}}", &parameter_name(parameter)),
-                            data.get(&parameter_data.name)
+                            setup
+                                .data
+                                .get(&parameter_data.name)
                                 .unwrap_or(&String::from("<missing>")),
                         );
                     }
                 }
                 openapiv3::Parameter::Query { parameter_data, .. } => {
-                    let parameter_value = data.get(&parameter_data.name);
+                    let parameter_value = setup.data.get(&parameter_data.name);
                     if parameter_data.required || parameter_value.is_some() {
                         query_params.push((
                             parameter_data.name.to_owned(),
@@ -492,27 +564,10 @@ fn format_parameter_name(parameter: &openapiv3::Parameter) -> String {
     }
 }
 
-fn request_loop(
-    config: &TicConfig,
-    data: &mut HashMap<String, String>,
-    selected_api: &ApiDefinition,
-    decoding_key: &DecodingKey,
-    selected_profile: &TicProfile,
-    selected_operation: &TicOperation,
-    env_data: &mut HashMap<String, String>,
-) {
+fn request_loop(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperation) {
     loop {
-        let full_path_with_parameters = build_request_path(
-            selected_profile,
-            selected_api,
-            selected_operation,
-            data,
-            true,
-        );
-        println!(
-            "{} {}",
-            selected_operation.method, full_path_with_parameters
-        );
+        let full_path_with_parameters = build_request_path(setup, api, operation, true);
+        println!("{} {}", operation.method, full_path_with_parameters);
 
         // TODO print the current body
         // TODO hide edit body for get requests
@@ -535,96 +590,57 @@ fn request_loop(
             _ => todo!(),
         };
         if a == "send" {
-            send_request(
-                config,
-                selected_profile,
-                decoding_key,
-                selected_api,
-                selected_operation,
-                env_data,
-                data,
-            );
+            send_request(setup, api, operation);
         } else if a == "invalidate token" {
-            env_data.remove(&selected_profile.env);
-            save_env(config, selected_profile, env_data)
+            setup.auth_data.remove(&setup.auth_name);
+            write_auth_data(setup)
         } else {
             let full_path = format!(
                 "{}://{}{}{}",
-                selected_profile.protocol,
-                selected_api.domain,
-                selected_profile.tld,
-                selected_operation.path
+                setup.protocol, api.domain, setup.tld, operation.path
             );
-            println!("{} {}", selected_operation.method, full_path);
+            println!("{} {}", operation.method, full_path);
 
             if a == "edit body" {
-                edit_body(
-                    selected_profile,
-                    selected_api,
-                    selected_operation,
-                    env_data,
-                    data,
-                    decoding_key,
-                );
-                save_data(config, selected_profile, data)
+                edit_body(operation, &mut setup.data);
+                write_data(setup)
             } else if a == "edit required parameters" {
-                edit_parameters(selected_operation, data, parameter_is_required);
-                save_data(config, selected_profile, data)
+                edit_parameters(operation, &mut setup.data, parameter_is_required);
+                write_data(setup)
             } else if a == "edit optional parameters" {
-                edit_parameters(selected_operation, data, |parameter| {
+                edit_parameters(operation, &mut setup.data, |parameter| {
                     !parameter_is_required(parameter)
                 });
-                save_data(config, selected_profile, data)
+                write_data(setup)
             }
         }
     }
 }
 
-fn save_env(
-    config: &TicConfig,
-    selected_profile: &TicProfile,
-    env_data: &mut HashMap<String, String>,
-) {
-    if let Some(environment) = config
-        .environments
-        .iter()
-        .find(|e| e.name == selected_profile.env)
-    {
-        let s = serde_json::json!(env_data);
-        fs::write(&environment.path, s.to_string()).expect("Could not save env data");
+fn write_auth_data(setup: &mut TicSetup) {
+    if let Some(file_path) = &setup.auth_data_path {
+        let s = serde_json::json!(setup.auth_data);
+        fs::write(file_path, s.to_string())
+            .unwrap_or_else(|err| panic!("Could not write auth data to {}: {}", file_path, err));
     }
 }
 
-fn save_data(
-    config: &TicConfig,
-    selected_profile: &TicProfile,
-    data: &mut HashMap<String, String>,
-) {
-    if let Some(data_path) = config
-        .data_paths
-        .iter()
-        .find(|e| e.name == selected_profile.env)
-    {
-        let s = serde_json::json!(data);
-        fs::write(&data_path.path, s.to_string()).expect("Could not save data");
+fn write_data(setup: &mut TicSetup) {
+    if let Some(file_path) = &setup.data_path {
+        let s = serde_json::json!(setup.data);
+        fs::write(file_path, s.to_string())
+            .unwrap_or_else(|err| panic!("Could not write data to {}: {}", file_path, err));
     }
 }
 
-fn operation_data_key(selected_operation: &TicOperation) -> String {
-    format!("{} {}", selected_operation.method, selected_operation.path)
+fn operation_data_key(operation: &TicOperation) -> String {
+    format!("{} {}", operation.method, operation.path)
 }
 
-fn edit_body(
-    _selected_profile: &TicProfile,
-    _selected_api: &ApiDefinition,
-    selected_operation: &TicOperation,
-    _env_data: &mut HashMap<String, String>,
-    data: &mut HashMap<String, String>,
-    _decoding_key: &DecodingKey,
-) {
+fn edit_body(operation: &TicOperation, data: &mut HashMap<String, String>) {
     match Editor::new("body")
         .with_predefined_text(
-            data.get(&operation_data_key(selected_operation))
+            data.get(&operation_data_key(operation))
                 .unwrap_or(&String::new()),
         )
         .with_file_extension(".json")
@@ -632,7 +648,7 @@ fn edit_body(
     {
         Ok(ok) => {
             if !ok.is_empty() {
-                data.insert(operation_data_key(selected_operation), ok);
+                data.insert(operation_data_key(operation), ok);
             }
         }
         Err(InquireError::OperationCanceled) => (),
@@ -641,14 +657,11 @@ fn edit_body(
     };
 }
 
-fn edit_parameters<P>(
-    selected_operation: &TicOperation,
-    data: &mut HashMap<String, String>,
-    filter: P,
-) where
+fn edit_parameters<P>(operation: &TicOperation, data: &mut HashMap<String, String>, filter: P)
+where
     P: Fn(&&openapiv3::Parameter) -> bool,
 {
-    for parameter in selected_operation
+    for parameter in operation
         .operation
         .parameters
         .iter()
@@ -656,9 +669,7 @@ fn edit_parameters<P>(
         .filter(filter)
     {
         let param_name = &parameter.parameter_data_ref().name.to_owned();
-        // TODO search for options/data/ids
-        // in the environment and use fuzzy
-        // search and autocomplete
+        // TODO search for configured options/data/ids and use fuzzy search and autocomplete
         match Text::new(&format_parameter_name(parameter))
             .with_initial_value(data.get(&param_name.to_owned()).unwrap_or(&"".to_owned()))
             .prompt()
@@ -677,31 +688,28 @@ fn edit_parameters<P>(
     }
 }
 
-fn check_and_edit_token(
-    config: &TicConfig,
-    selected_profile: &TicProfile,
-    env_data: &mut HashMap<String, String>,
-    decoding_key: &DecodingKey,
-) {
-    if let Some(token) = env_data.get(&selected_profile.env) {
+fn check_and_edit_token(setup: &mut TicSetup) {
+    // TODO make this function return the token instead of just saving it in the auth data
+    // -> Result<Option<Token>, Cancel>
+    if let Some(token) = setup.auth_data.get(&setup.auth_name.to_owned()) {
         match jsonwebtoken::decode::<Jwt>(
             token,
-            decoding_key,
+            &setup.decoding_key,
             &jsonwebtoken::Validation::new(jsonwebtoken::Algorithm::RS256),
         ) {
             Ok(_) => (),
             Err(error) => {
                 println!(
-                    "Removed invalid token for env '{}': {}",
-                    &selected_profile.env, error
+                    "Removed invalid token for auth '{}': {}",
+                    &setup.auth_name, error
                 );
-                env_data.remove(&selected_profile.env);
+                setup.auth_data.remove(&setup.auth_name.to_owned());
             }
         }
     }
 
-    if env_data.get(&selected_profile.env).is_none() {
-        let decoding_key = decoding_key.clone();
+    if setup.auth_data.get(&setup.auth_name.to_owned()).is_none() {
+        let decoding_key = setup.decoding_key.clone();
         let validator = move |token: &str| match jsonwebtoken::decode::<Jwt>(
             token,
             &decoding_key,
@@ -711,7 +719,9 @@ fn check_and_edit_token(
             Err(error) => Ok(Validation::Invalid(error.into())),
         };
 
-        let valid_token = match Editor::new(&format!("token for {}", selected_profile.env))
+        // TODO make empty string a valid option to send the request without auth
+        // and cancel should not send the request
+        let valid_token = match Editor::new(&format!("token for {}", setup.auth_name))
             .with_validator(validator)
             .prompt()
         {
@@ -721,55 +731,43 @@ fn check_and_edit_token(
             _ => todo!(),
         };
 
-        env_data.insert(selected_profile.env.clone(), valid_token);
+        setup
+            .auth_data
+            .insert(setup.auth_name.to_owned(), valid_token);
         // TODO print when token expires
     }
 
-    save_env(config, selected_profile, env_data)
+    write_auth_data(setup)
 }
 
-fn send_request(
-    config: &TicConfig,
-    selected_profile: &TicProfile,
-    decoding_key: &DecodingKey,
-    selected_api: &ApiDefinition,
-    selected_operation: &TicOperation,
-    env_data: &mut HashMap<String, String>,
-    data: &mut HashMap<String, String>,
-) {
+fn send_request(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperation) {
     // TODO do not send request if this is cancelled
-    check_and_edit_token(config, selected_profile, env_data, decoding_key);
+    check_and_edit_token(setup);
 
     // TODO verify that all required parameters exists
 
-    let body: String = data
-        .get(&operation_data_key(selected_operation))
+    let body: String = setup
+        .data
+        .get(&operation_data_key(operation))
         .unwrap_or(&String::new())
         .to_owned();
 
-    let full_path_with_parameters = build_request_path(
-        selected_profile,
-        selected_api,
-        selected_operation,
-        data,
-        false,
-    );
+    let full_path_with_parameters = build_request_path(setup, api, operation, false);
 
     match reqwest::blocking::Client::builder()
         .danger_accept_invalid_certs(true)
         .build()
         .unwrap()
-        .request(
-            selected_operation.method.to_owned(),
-            &full_path_with_parameters,
-        )
+        .request(operation.method.to_owned(), &full_path_with_parameters)
         .body(body)
         .header(
+            // TODO do not set auth header if no token
             "Authorization",
             format!(
                 "Bearer {}",
-                env_data
-                    .get(&selected_profile.env)
+                setup
+                    .auth_data
+                    .get(&setup.auth_name)
                     .unwrap_or(&String::new())
             ),
         )
