@@ -880,6 +880,8 @@ fn send_request(setup: &mut TicSetup, api: &ApiDefinition, operation: &TicOperat
         .send()
     {
         Ok(response) => {
+            println!("{}", response.status());
+
             let response_text: String = response
                 .text()
                 .expect("Could not get response text")
