@@ -97,7 +97,7 @@ struct TicEnvConfig {
     tld: String,
 }
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Debug, Clone)]
 struct TicDataConfig {
     name: String,
     path: String,
@@ -236,7 +236,7 @@ fn create_setup_loop(config: &TicConfig, apis: Vec<ApiDefinition>) {
         #[cfg(debug_assertions)]
         dbg!(&env);
 
-        let auth = match get_optional_auth_config(config, profile.auth.as_ref()) {
+        let auth = match get_optional_auth_config(config, &profile.auth) {
             Some(ok) => ok,
             None => continue,
         };
@@ -293,45 +293,37 @@ fn create_setup_loop(config: &TicConfig, apis: Vec<ApiDefinition>) {
         #[cfg(debug_assertions)]
         dbg!(&auth_data);
 
-        let mut data = std::collections::HashMap::<String, String>::new();
+        let data_config = match get_optional_data_config(config, &profile.data) {
+            Some(ok) => ok,
+            None => continue,
+        };
+        #[cfg(debug_assertions)]
+        dbg!(&data_config);
 
-        // TODO prompt for data config if missing
-        let data_path = match &profile.data {
-            None => None,
-            Some(data_name) => {
-                if let Some(data_config) = config.data.iter().find(|e| e.name.eq(data_name)) {
-                    let saved_data_string = match fs::read_to_string(&data_config.path) {
-                        Ok(ok) => ok,
-                        Err(err) => {
-                            println!(
-                                "Could not read {} data file {}: {}",
-                                data_config.name, data_config.path, err
-                            );
-                            continue;
-                        }
-                    };
-                    let saved_data: HashMap<String, String> =
-                        match serde_json::from_str(&saved_data_string) {
-                            Ok(ok) => ok,
-                            Err(err) => {
-                                println!(
-                                    "Could not deserialize {} data file {}: {}",
-                                    data_config.name, data_config.path, err
-                                );
-                                continue;
-                            }
-                        };
-                    data = saved_data;
-                    Some(data_config.path.to_owned())
-                } else {
-                    println!(
-                        "Could not find data with name '{}' in configuration specified by profile '{}'",
-                        data_name, profile.name,
-                    );
-                    continue;
-                }
+        let saved_data_string = match fs::read_to_string(&data_config.path) {
+            Ok(ok) => ok,
+            Err(err) => {
+                println!(
+                    "Could not read {} data file {}: {}",
+                    data_config.name, data_config.path, err
+                );
+                continue;
             }
         };
+        let saved_data: HashMap<String, String> = match serde_json::from_str(&saved_data_string) {
+            Ok(ok) => ok,
+            Err(err) => {
+                println!(
+                    "Could not deserialize {} data file {}: {}",
+                    data_config.name, data_config.path, err
+                );
+                continue;
+            }
+        };
+
+        // TODO default to empty data if no data path is chosen
+        // let mut data = std::collections::HashMap::<String, String>::new();
+        let data = saved_data;
         #[cfg(debug_assertions)]
         dbg!(&data);
 
@@ -343,7 +335,8 @@ fn create_setup_loop(config: &TicConfig, apis: Vec<ApiDefinition>) {
             auth_data: auth_data.clone(),
             auth_data_path: auth.path.clone(),
             data: data.clone(),
-            data_path,
+            // TODO add option to not persist data in prompt and make this None
+            data_path: Some(data_config.path.clone()),
         };
         #[cfg(debug_assertions)]
         dbg!(&setup);
@@ -385,7 +378,7 @@ fn get_optional_profile(config: &TicConfig) -> Option<TicProfileConfig> {
 
 fn get_optional_auth_config(
     config: &TicConfig,
-    profile_auth: Option<&String>,
+    profile_auth: &Option<String>,
 ) -> Option<TicAuthConfig> {
     if let Some(auth) = profile_auth {
         return Some(
@@ -451,6 +444,42 @@ fn get_optional_env_config(
     };
 
     Some(config.env[selected_env_index].clone())
+}
+
+fn get_optional_data_config(
+    config: &TicConfig,
+    profile_data: &Option<String>,
+) -> Option<TicDataConfig> {
+    if let Some(data) = profile_data {
+        return Some(
+            config
+                .data
+                .iter()
+                .find(|d| d.name.eq(data))
+                .unwrap_or_else(|| {
+                    panic!("Could not find data with name '{}' in configuration", data)
+                })
+                .clone(),
+        );
+    }
+
+    // TODO support not loading data
+    // TODO support not persisting data
+    let selected_index = match Select::new(
+        "data",
+        config.data.iter().map(|d| d.name.to_owned()).collect(),
+    )
+    .with_vim_mode(true)
+    .raw_prompt()
+    .map(|op| op.index)
+    {
+        Ok(i) => i,
+        Err(InquireError::OperationCanceled) => return None,
+        Err(InquireError::OperationInterrupted) => std::process::exit(0),
+        e => panic!("{:?}", e),
+    };
+
+    Some(config.data[selected_index].clone())
 }
 
 fn select_api_loop(setup: &mut TicSetup, apis: &[ApiDefinition]) {

@@ -33,7 +33,9 @@ A list of services specified by a domain and the path to an openapi version 3 fi
 All requests to the service will be made to the domain with current profile protocol prepended and tld appended.
 
 #### profile
-Each containing a setup consisting of an env, an auth, and an optional data configuration.
+Each containing a name, an optional env, an optional auth, and an optional data configuration.
+Either of env/auth/data that is not provided in a profile will be prompted for.
+An empty profile list will prompt for all parts.
 
 #### env
 Each containing a protocol and top level domain.
