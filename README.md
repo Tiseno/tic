@@ -31,6 +31,7 @@ To use tic, you need a configuration in your current directory or home folder na
 #### api
 A list of services specified by a domain and the path to an openapi version 3 file in json format.
 All requests to the service will be made to the domain with current profile protocol prepended and tld appended.
+To make request to a local service, you can add the service to your `/etc/hosts` mappings like `127.0.0.1	my-service.local` and define the env tld as `local:<port>`.
 
 #### profile
 Each containing a name, an optional env, an optional auth, and an optional data configuration.
